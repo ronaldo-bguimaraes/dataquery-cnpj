@@ -1,3 +1,7 @@
+import os
+from pathlib import Path
+import zipfile
+
 import pyarrow as pa
 import pyarrow.csv as pv
 import pyarrow.parquet as pq
@@ -49,3 +53,19 @@ def convert_csv_to_parquet(
             "iterations": iterations,
             "processed_lines": processed_lines
         }
+
+def convert_compressed_csv_to_parquet(
+    filepath: str,
+    columns_names: list[str],
+    chunk_size: int = 1024 * 1000,
+    output_file: os.PathLike | str = None
+):
+    if not output_file:
+        output_file = Path(filepath).with_suffix(".parquet")
+    with zipfile.ZipFile(filepath) as zip:
+        namelist = zip.namelist()
+        if len(namelist) > 1:
+            raise RuntimeError(f"Expected exactly one file inside ZIP, found {len(namelist)}")
+        filename = namelist[0]
+        with zip.open(filename) as file:
+            return convert_csv_to_parquet(file, output_file, columns_names, chunk_size, encoding="latin1")
