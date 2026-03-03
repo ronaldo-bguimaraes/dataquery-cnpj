@@ -1,15 +1,17 @@
 import locale
-from pathlib import Path
 import time
 import zipfile
+
+from pathlib import Path
 from conversor import convert_csv_to_parquet
+from utils import get_available_memory
 
 locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
 
-def convert_compressed_csv_with_pyarrow(
+def convert_compressed_csv_to_parquet(
     filepath: str,
     columns_names: list[str],
-    use_pandas: bool = True
+    chunk_size: int = 1024 * 1000
 ):
     newfilepath = Path(filepath).with_suffix(".parquet")
     with zipfile.ZipFile(filepath) as zip:
@@ -18,7 +20,7 @@ def convert_compressed_csv_with_pyarrow(
             raise RuntimeError(f"Expected exactly one file inside ZIP, found {len(namelist)}")
         filename = namelist[0]
         with zip.open(filename) as file:
-            return convert_csv_to_parquet(file, newfilepath, columns_names, encoding="latin1", use_pandas_csv_engine=use_pandas)
+            return convert_csv_to_parquet(file, newfilepath, columns_names, chunk_size, encoding="latin1")
 
 filepath = "tmp/Empresas0.zip"
 
@@ -32,15 +34,15 @@ columns_names = [
     "ente_federativo"
 ]
 
-def test_time(use_pandas: bool = False):
-    print("iniciando conversao para parquet")
+def test_time():
+    print("iniciando conversao para parquet...")
     start = time.perf_counter()
-    metrics = convert_compressed_csv_with_pyarrow(filepath, columns_names, use_pandas)
+    ideal_chunk = get_available_memory() * 0.05
+    metrics = convert_compressed_csv_to_parquet(filepath, columns_names, ideal_chunk)
     duration = time.perf_counter() - start
     iterations = metrics["iterations"]
     processed_lines = metrics["processed_lines"]
     formatted_string  = locale.format_string("%.2f", processed_lines, grouping=True)
-    print(f"[with_pandas={use_pandas}] parquet com {formatted_string} linhas gerado com sucesso em {iterations} iteracoes em {duration:.2f}s")
+    print(f"parquet com {formatted_string} linhas gerado com sucesso em {iterations} iteracoes em {duration:.2f}s")
 
-test_time(use_pandas=True)
-test_time(use_pandas=False)
+test_time()

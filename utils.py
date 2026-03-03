@@ -1,7 +1,19 @@
+import psutil
 import pyarrow as pa
 
-def pa_schema_from_list(columns_names, default_type, as_dict: bool = False):
+from typing import Iterable
+
+
+def pyarrow_schema_from_list(
+    columns_names: Iterable[str],
+    default_type, as_dict: bool = False
+):
     dict_schema = dict.fromkeys(columns_names, default_type)
     if as_dict:
         return dict_schema
     return pa.schema(dict_schema)
+
+
+def get_available_memory():
+    svmem = psutil.virtual_memory()
+    return svmem.available
