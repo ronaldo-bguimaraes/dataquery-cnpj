@@ -6,7 +6,8 @@ from typing import Iterable
 
 def pyarrow_schema_from_list(
     columns_names: Iterable[str],
-    default_type, as_dict: bool = False
+    default_type: pa.DataType,
+    as_dict: bool = False
 ):
     dict_schema = dict.fromkeys(columns_names, default_type)
     if as_dict:
