@@ -12,14 +12,15 @@ def convert_csv_to_parquet(
     encoding: str = "utf-8",
     strings_can_be_null: bool = True,
     default_type: pa.DataType = pa.string(),
+    write_statistics: bool = False,
     delimiter: str = ";"
 ):
-    schema = pyarrow_schema_from_list(columns_names, default_type)
-    with pq.ParquetWriter(
-        output_path,
-        schema,
-        write_statistics=False
-    ) as writer:
+    parquet_writer = pq.ParquetWriter(
+        where=output_path,
+        write_statistics=write_statistics,
+        schema=pyarrow_schema_from_list(columns_names, default_type)
+    )
+    with parquet_writer as writer:
         reader_options = pv.ReadOptions(
             column_names=columns_names,
             block_size=chunk_size,
@@ -27,7 +28,7 @@ def convert_csv_to_parquet(
         )
         convert_options = pv.ConvertOptions(
             strings_can_be_null=strings_can_be_null,
-            column_types=schema
+            column_types=parquet_writer.schema
         )
         parser_options = pv.ParseOptions(
             delimiter=delimiter
