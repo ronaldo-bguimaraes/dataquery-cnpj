@@ -9,7 +9,7 @@
  - iterações: 26
  - tempo: 162.00s
 
-### PyArrow para leitura de csv e escrita de parquet
+### PyArrow para leitura de csv (open_csv com block_size) e escrita de parquet
  - iterações: 2000
  - tempo: 83.14s
  - 48% mais rápido em relação a leitura com pandas
