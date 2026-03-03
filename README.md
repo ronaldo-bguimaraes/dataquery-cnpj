@@ -15,4 +15,4 @@
  - 48% mais rápido em relação a leitura com pandas
 
 ### Polars para leitura de csv (scan_csv modo lazy) e PyArrow para escrita de parquet
- - Sem resultado, Polars com o método  suporta apenas os encodings utf8 e utf8-lossy
+ - Sem resultado, Polars suporta apenas os encodings utf8 e utf8-lossy
