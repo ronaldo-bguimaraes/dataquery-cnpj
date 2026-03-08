@@ -2,10 +2,16 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "main",
+            "name": "read_files",
             "type": "debugpy",
             "request": "launch",
-            "module": "main"
+            "module": "read_files"
+        },
+        {
+            "name": "src.rfb_client",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.rfb_client"
         }
     ]
 }
