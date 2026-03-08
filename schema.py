@@ -1,6 +1,6 @@
 schema = {
     "empresas": {
-        "match": "(?i)^empresas\\d*\\.zip",
+        "pattern": "^empresas",
         "columns": [
             "empresa_cnpj_basico",
             "empresa_razao_social",
@@ -12,7 +12,7 @@ schema = {
         ]
     },
     "estabelecimentos": {
-        "match": "(?i)^estabelecimentos\\d*\\.zip",
+        "pattern": "^estabelecimentos",
         "columns": [
             "estabelecimento_cnpj_basico",
             "estabelecimento_cnpj_ordem",
@@ -40,13 +40,14 @@ schema = {
             "estabelecimento_ddd_2",
             "estabelecimento_telefone_2",
             "estabelecimento_ddd_fax",
+            "estabelecimento_numero_fax",
             "estabelecimento_correio_eletronico",
             "estabelecimento_situacao_especial",
             "estabelecimento_data_situacao_especial"
         ]
     },
     "simples": {
-        "match": "(?i)^simples\\d*\\.zip",
+        "pattern": "^simples",
         "columns": [
             "simples_cnpj_basico",
             "simples_opcao_simples",
@@ -58,7 +59,7 @@ schema = {
         ]
     },
     "socios": {
-        "match": "(?i)^socios\\d*\\.zip",
+        "pattern": "^socios",
         "columns": [
             "socio_cnpj_basico",
             "socio_identificador_socio",
@@ -74,38 +75,45 @@ schema = {
         ]
     },
     "paises": {
-        "match": "(?i)^paises\\d*\\.zip",
+        "pattern": "^paises",
         "columns": [
             "pais_codigo",
             "pais_descricao"
         ]
     },
     "municipios": {
-        "match": "(?i)^municipios\\d*\\.zip",
+        "pattern": "^municipios",
         "columns": [
             "municipio_codigo",
             "municipio_descricao"
         ]
     },
     "qualificacoes_socios": {
-        "match": "(?i)^qualificacoes\\d*\\.zip",
+        "pattern": "^qualificacoes",
         "columns": [
             "qualificacao_socio_codigo",
             "qualificacao_socio_descricao"
         ]
     },
     "naturezas_juridicas": {
-        "match": "(?i)^naturezas\\d*\\.zip",
+        "pattern": "^naturezas",
         "columns": [
             "natureza_juridica_codigo",
             "natureza_juridica_descricao"
         ]
     },
     "cnaes": {
-        "match": "(?i)^cnaes\\d*\\.zip",
+        "pattern": "^cnaes",
         "columns": [
             "cnae_codigo",
             "cnae_descricao"
+        ]
+    },
+    "motivos": {
+        "pattern": "^motivos",
+        "columns": [
+            "motivo_codigo",
+            "motivo_descricao"
         ]
     }
 }
