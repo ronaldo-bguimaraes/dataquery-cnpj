@@ -1,6 +1,6 @@
-from functools import cached_property
 import re
 
+from functools import cached_property
 from src.webdav.auto_webdav_client import get_webdav_client
 
 
@@ -39,12 +39,3 @@ class ClientRFB:
 
     def get_file_url(self, filepath: str):
         return f"{self.webdav_hostname}/{filepath}"
-
-
-client = ClientRFB()
-
-comp = "2026-02"
-
-result = [client.get_file_url(x) for x in client.list_files(comp)]
-
-print(len(result))

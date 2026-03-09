@@ -8,10 +8,10 @@
             "module": "read_files"
         },
         {
-            "name": "src.rfb_client",
+            "name": "src.extract_cnpj_files",
             "type": "debugpy",
             "request": "launch",
-            "module": "src.rfb_client"
+            "module": "src.extract_cnpj_files"
         }
     ]
 }
