@@ -1,8 +1,8 @@
 import asyncio
 
 from file_manager import tmp_path
-from src.download_files import download_files
-from src.rfb_client import ClientRFB
+from download_utils.download_files import download_files
+from extracao_rfb.rfb_client import ClientRFB
 
 
 client = ClientRFB()
