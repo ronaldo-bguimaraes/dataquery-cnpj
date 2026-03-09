@@ -1,0 +1,14 @@
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+        - "9000:9000"      # Console/API
+        - "9001:9001"      # MinIO Console (opcional)
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+    command: server /data --console-address ":9001"
+    volumes:
+      - ./.docker/volumes/minio:/data
+    restart: unless-stopped

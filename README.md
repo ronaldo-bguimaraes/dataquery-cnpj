@@ -16,3 +16,17 @@
 
 ### Polars para leitura de csv (scan_csv modo lazy) e PyArrow para escrita de parquet
  - Sem resultado, Polars suporta apenas os encodings utf8 e utf8-lossy
+
+
+# Levanta Infra
+## Requisitos
+Ter docker instalado
+
+## Comando
+```shell
+docker compose up -d
+```
+
+# Configuração Minio
+
+[MinIO Console](http://localhost:9001)
