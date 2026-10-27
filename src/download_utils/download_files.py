@@ -1,98 +1,156 @@
-from itertools import count
-import os
+from __future__ import annotations
 
 import asyncio
+import os
+import time
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal
+
 import aiohttp
 
-from pathlib import Path
-from tqdm import tqdm
+from src.download_utils.redaction import describe_exception
+
+FileStatus = Literal["baixado", "ignorado", "falhou"]
+
+DEFAULT_CHUNK_SIZE = 1024 * 1024
+DEFAULT_CONCURRENCY = 3
 
 
-async def _download_file(
-    queue: asyncio.Queue,
-    output_dir: str,
+@dataclass(frozen=True)
+class DownloadTarget:
+    """One file to download. ``url`` is hidden from ``repr`` on purpose."""
+
+    nome: str
+    url: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class FileResult:
+    nome: str
+    status: FileStatus
+    bytes: int = 0
+    erro: str | None = None
+
+
+@dataclass(frozen=True)
+class DownloadReport:
+    resultados: tuple[FileResult, ...]
+    baixados: int
+    ignorados: int
+    falhas: int
+    bytes_baixados: int
+    duracao_segundos: float
+
+
+def _require_positive(name: str, value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} deve ser um inteiro >= 1")
+
+
+def _valid_name(name: str) -> bool:
+    return bool(name) and name not in {".", ".."} and "/" not in name and "\\" not in name
+
+
+def _temporary_path(final_path: Path) -> Path:
+    return final_path.with_name(f".{final_path.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
+
+
+async def _download_one(
     session: aiohttp.ClientSession,
+    target: DownloadTarget,
+    output_dir: Path,
     chunk_size: int,
-    counter: count[int],
-    total_count: int,
-    position: int
-):
-    while True:
-        url = await queue.get()
-        _count = next(counter)
+) -> FileResult:
+    final_path = output_dir / target.nome
 
-        try:
-            filename = url.rpartition("/")[2]
-            output_file = Path(output_dir, filename)
-            temp_file = output_file.with_suffix(".download")
+    if final_path.is_file() and final_path.stat().st_size > 0:
+        return FileResult(nome=target.nome, status="ignorado")
 
-            if output_file.exists():
-                raise FileExistsError("Arquivo já existe no disco")
+    temporary_path = _temporary_path(final_path)
+    written = 0
+    expected: int | None = None
 
-            limit_length = 30
-            filename_desc = str(filename).ljust(limit_length)
-            if len(filename_desc) > limit_length:
-                filename_desc = filename_desc[:limit_length-3] + "..."
+    try:
+        async with session.get(target.url) as response:
+            response.raise_for_status()
 
-            tqdm_desc = f"[{_count}/{total_count}] {filename_desc}"
+            if not response.headers.get("Content-Encoding"):
+                expected = response.content_length
 
-            async with session.get(url) as resp:
-                resp.raise_for_status()
+            with open(temporary_path, "wb") as handle:
+                async for chunk in response.content.iter_chunked(chunk_size):
+                    handle.write(chunk)
+                    written += len(chunk)
 
-                content_length = resp.content_length
+        if expected is not None and written != expected:
+            raise OSError(f"tamanho incompleto: {written} de {expected} bytes")
 
-                pbar = tqdm(
-                    total=content_length,
-                    unit="B",
-                    unit_scale=True,
-                    unit_divisor=1024,
-                    ascii=True,
-                    bar_format="{desc} [{bar:40}] {percentage:3.0f}% | {n_fmt}/{total_fmt} | {rate_fmt} | ETA {remaining}",
-                    desc=tqdm_desc,
-                    position=position,
-                    leave=True
-                )
-
-                with open(temp_file, "wb") as file, pbar as bar:
-                    async for chunk in resp.content.iter_chunked(chunk_size):
-                        file.write(chunk)
-                        bar.update(len(chunk))
-
-                temp_file.rename(output_file)
-
-        except:
-            if temp_file.exists():
-                temp_file.unlink()
-
-        finally:
-            queue.task_done()
+        os.replace(temporary_path, final_path)
+        return FileResult(nome=target.nome, status="baixado", bytes=written)
+    except Exception as exc:  # noqa: BLE001 - each file fails independently
+        return FileResult(
+            nome=target.nome,
+            status="falhou",
+            erro=describe_exception(exc),
+        )
+    finally:
+        if temporary_path.exists():
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
 
 
 async def download_files(
-    output_dir: str,
-    urls: list[str],
-    concurrency: int = 3,
-    chunk_size: int = 4096
-):
-    os.makedirs(output_dir, exist_ok=True)
+    targets: list[DownloadTarget] | tuple[DownloadTarget, ...],
+    output_dir: str | os.PathLike[str],
+    *,
+    concorrencia: int = DEFAULT_CONCURRENCY,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> DownloadReport:
+    """Download ``targets`` into ``output_dir``, isolating per-file failures.
 
-    queue = asyncio.Queue()
+    The function never raises for an individual file failure: the returned report carries
+    ``falhou`` results so the caller can decide how to surface the failure.
+    """
 
-    counter = count(0)
-    total_count = len(urls)
+    _require_positive("concorrencia", concorrencia)
+    _require_positive("chunk_size", chunk_size)
 
-    for url in urls:
-        queue.put_nowait(url)
+    for target in targets:
+        if not _valid_name(target.nome):
+            raise ValueError(f"nome de arquivo inválido: {target.nome!r}")
 
-    async with aiohttp.ClientSession() as session:
-        workers: list[asyncio.Task] = []
-        for i in range(concurrency):
-            coro = _download_file(queue, output_dir, session, chunk_size, counter, total_count, i)
-            workers.append(asyncio.create_task(coro))
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
 
-        await queue.join()
+    started = time.monotonic()
+    semaphore = asyncio.Semaphore(concorrencia)
 
-        for worker in workers:
-            worker.cancel()
+    timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=300)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
 
-        await asyncio.gather(*workers, return_exceptions=True)
+        async def run(target: DownloadTarget) -> FileResult:
+            async with semaphore:
+                return await _download_one(session, target, directory, chunk_size)
+
+        if targets:
+            resultados = await asyncio.gather(*(run(target) for target in targets))
+        else:
+            resultados = ()
+
+    ordered = tuple(sorted(resultados, key=lambda result: result.nome))
+    baixados = sum(1 for result in ordered if result.status == "baixado")
+    ignorados = sum(1 for result in ordered if result.status == "ignorado")
+    falhas = sum(1 for result in ordered if result.status == "falhou")
+
+    return DownloadReport(
+        resultados=ordered,
+        baixados=baixados,
+        ignorados=ignorados,
+        falhas=falhas,
+        bytes_baixados=sum(result.bytes for result in ordered if result.status == "baixado"),
+        duracao_segundos=time.monotonic() - started,
+    )

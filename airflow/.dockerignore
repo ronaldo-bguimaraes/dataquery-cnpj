@@ -1,0 +1,9 @@
+logs/
+config/
+dags/
+plugins/
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage

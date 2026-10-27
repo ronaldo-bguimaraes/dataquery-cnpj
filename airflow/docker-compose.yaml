@@ -49,8 +49,10 @@ x-airflow-common:
   # In order to add custom dependencies or upgrade provider distributions you can use your extended image.
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.3.2}
-  # build: .
+  image: ${AIRFLOW_IMAGE_NAME:-dataquery-cnpj-airflow:3.3.2}
+  build:
+    context: .
+    target: base
   env_file:
     - ${ENV_FILE_PATH:-.env}
   environment:
@@ -60,9 +62,9 @@ x-airflow-common:
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
-    AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
+    AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY:-}
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:-airflow_jwt_secret}
     AIRFLOW__API_AUTH__JWT_ISSUER: ${AIRFLOW__API_AUTH__JWT_ISSUER:-airflow}
@@ -76,11 +78,17 @@ x-airflow-common:
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    # Pipeline code is mounted read-only; tests and DAGs import it from PYTHONPATH.
+    PYTHONPATH: /opt/dataquery-cnpj
+    PYTHONDONTWRITEBYTECODE: '1'
+    CNPJ_DOWNLOAD_DIR: /data/cnpj
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
+    - ${CNPJ_CODE_HOST_DIR:-..}:/opt/dataquery-cnpj:ro
+    - ${CNPJ_DATA_HOST_DIR:-../data/cnpj}:/data/cnpj
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -282,9 +290,15 @@ services:
         echo
         chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,dags,plugins,config}
         echo
+        echo "Ensuring download output directory exists:"
+        echo
+        mkdir -v -p /data/cnpj
+        chown -v -R "${AIRFLOW_UID:-50000}:0" /data/cnpj
+        echo
         echo "Files in shared volumes:"
         echo
         ls -la /opt/airflow/{logs,dags,plugins,config}
+        ls -la /data/cnpj
 
     # yamllint enable rule:line-length
     environment:
@@ -308,6 +322,24 @@ services:
       - bash
       - -c
       - airflow
+    depends_on:
+      <<: *airflow-common-depends-on
+
+  airflow-tests:
+    <<: *airflow-common
+    profiles:
+      - test
+    build:
+      context: .
+      target: test
+    image: ${AIRFLOW_TEST_IMAGE_NAME:-dataquery-cnpj-airflow}:test
+    working_dir: /opt/dataquery-cnpj
+    entrypoint: ["python", "-m", "pytest"]
+    command: ["-p", "no:cacheprovider"]
+    environment:
+      <<: *airflow-common-env
+      # The repository is mounted read-only; keep coverage data writable.
+      COVERAGE_FILE: /tmp/.coverage
     depends_on:
       <<: *airflow-common-depends-on
 
