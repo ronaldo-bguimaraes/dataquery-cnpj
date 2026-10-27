@@ -53,8 +53,9 @@ x-airflow-common:
   build:
     context: .
     target: base
+  # Single environment file for the whole repository.
   env_file:
-    - ${ENV_FILE_PATH:-.env}
+    - ../.env
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
@@ -82,13 +83,17 @@ x-airflow-common:
     PYTHONPATH: /opt/dataquery-cnpj
     PYTHONDONTWRITEBYTECODE: '1'
     CNPJ_DOWNLOAD_DIR: /data/cnpj
+    # Local storage backend: ./data on the host, mounted as /data.
+    CNPJ_STORAGE_BACKEND: ${CNPJ_STORAGE_BACKEND:-filesystem}
+    CNPJ_DATA_ROOT: ${CNPJ_DATA_ROOT:-/data}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${CNPJ_CODE_HOST_DIR:-..}:/opt/dataquery-cnpj:ro
-    - ${CNPJ_DATA_HOST_DIR:-../data/cnpj}:/data/cnpj
+    # Raw and Bronze live here (raw/ and bronze/ logical prefixes).
+    - ${CNPJ_DATA_HOST_DIR:-../data}:/data
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -290,15 +295,15 @@ services:
         echo
         chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,dags,plugins,config}
         echo
-        echo "Ensuring download output directory exists:"
+        echo "Ensuring data storage directory exists:"
         echo
-        mkdir -v -p /data/cnpj
-        chown -v -R "${AIRFLOW_UID:-50000}:0" /data/cnpj
+        mkdir -v -p /data
+        chown -v -R "${AIRFLOW_UID:-50000}:0" /data
         echo
         echo "Files in shared volumes:"
         echo
         ls -la /opt/airflow/{logs,dags,plugins,config}
-        ls -la /data/cnpj
+        ls -la /data
 
     # yamllint enable rule:line-length
     environment:
@@ -340,8 +345,13 @@ services:
       <<: *airflow-common-env
       # The repository is mounted read-only; keep coverage data writable.
       COVERAGE_FILE: /tmp/.coverage
+    # Tests use in-memory fakes and a temporary filesystem backend; S3/R2 tests
+    # skip when no endpoint is configured. MinIO is not required for this suite.
     depends_on:
-      <<: *airflow-common-depends-on
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
   # You can enable flower by adding "--profile flower" option e.g. docker-compose --profile flower up
   # or by explicitly targeted on the command line e.g. docker-compose up flower.

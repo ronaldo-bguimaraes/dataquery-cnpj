@@ -9,4 +9,7 @@ htmlcov/
 /.env
 /.vscode
 
-data/
+/.agents/
+
+/data/*
+!/data/.gitkeep

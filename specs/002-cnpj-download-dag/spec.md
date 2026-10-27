@@ -1,239 +1,251 @@
-# Feature Specification: Primeira DAG de Download de Dados CNPJ
+# Feature Specification: Download e conversão CNPJ com Airflow
 
 **Feature Branch**: `002-cnpj-download-dag`
-
 **Created**: 2026-10-26
-
 **Status**: Draft
+**Input**: Operar manualmente uma competência da Receita Federal com uma única DAG: baixar ou reutilizar cada ZIP em Raw no armazenamento configurado e, em seguida, converter o mesmo arquivo para Parquet em Bronze, com tarefas independentes por arquivo.
 
-**Input**: User description: "Criar uma primeira DAG do Airflow para executar manualmente o downloader de dados CNPJ que já existe no repositório. A DAG deve receber uma competência no formato AAAA-MM, listar os arquivos dessa competência na fonte da Receita Federal e baixá-los para um diretório persistente acessível pelo container que executa a tarefa.
+## Escopo
 
-Reutilizar o código de extração e download existente, tornando-o chamável como função sem executar trabalho durante a importação da DAG. A tarefa deve registrar quantos arquivos foram encontrados, baixados, ignorados por já existirem e falhar se algum download falhar.
+Há uma única DAG manual (`cnpj_download_manual`), disparada uma vez por competência
+`AAAA-MM`. Não há uma DAG por arquivo nem agendamento automático.
 
-O primeiro teste deve poder limitar a quantidade de arquivos baixados, para evitar iniciar uma competência inteira sem intenção. Não adicionar agendamento automático, conversão para Parquet, publicação no R2, interface web ou API nesta etapa.
+Em runtime, a DAG lista os arquivos publicados, ordena-os de forma determinística, aplica o
+limite opcional e cria, para cada ZIP selecionado, duas tarefas encadeadas:
 
-Incluir cenários para competência inválida, competência sem arquivos, arquivo já baixado e falha de download. Considerar que as tarefas rodam em containers Airflow e precisam ter acesso ao código, dependências e diretório de saída."
+1. `baixar_raw`: baixa o ZIP da RFB para o armazenamento configurado ou reutiliza a cópia
+   Raw já existente.
+2. `converter_bronze`: lê o ZIP do Raw, converte o CSV para Parquet e grava o resultado em
+   Bronze.
 
-**Escopo desta etapa**: uma única execução manual que baixa os arquivos brutos de uma competência. Agendamento automático, conversão para Parquet, publicação em storage de objetos, interface web e API ficam **fora** desta versão.
+Os ZIPs permanecem no armazenamento configurado em `raw/<AAAA-MM>/<nome-original>`. Os
+Parquets ficam em `bronze/<AAAA-MM>/<nome-base>.parquet`. As cópias Raw são preservadas por
+competência.
 
-## User Scenarios & Testing *(mandatory)*
+No modo local, o armazenamento é o filesystem do repositório: a pasta `data/` na raiz,
+montada como `/data` nos containers que executam tarefas. Em produção, o backend pode ser
+selecionado por configuração para Cloudflare R2 via API compatível com S3. Esta entrega não
+inclui camadas Silver/Gold, agendamento automático, frontend ou API.
 
-### User Story 1 - Executar manualmente o download de uma competência (Priority: P1)
+## User Scenarios & Testing
 
-Como operador do pipeline, quero disparar manualmente uma execução informando a competência
-(AAAA-MM) para obter os arquivos daquele mês no diretório persistente e saber exatamente o
-que aconteceu com cada arquivo.
+### User Story 1 — Baixar e converter uma competência (Priority: P1)
 
-**Why this priority**: é a menor fatia útil do pipeline: substitui o script que roda no
-import com competência fixa por uma execução parametrizada, observável e repetível. Sozinha,
-já entrega valor e valida conectividade com a fonte e acesso ao diretório de saída antes de
-qualquer automação.
+Como operador, quero disparar manualmente uma competência e obter seus ZIPs originais em Raw
+e seus Parquets em Bronze, acompanhando o resultado por arquivo.
 
-**Independent Test**: com uma competência publicada e o diretório de saída vazio, disparar a
-execução com `2026-02` e verificar os arquivos no diretório persistente e o resumo com as
-contagens na execução.
+**Why this priority**: entrega o primeiro fluxo utilizável do pipeline, da fonte ao formato
+analítico, mantendo os estágios rastreáveis e reprocessáveis.
 
-**Acceptance Scenarios**:
-
-1. **Given** uma competência válida e publicada e o diretório de saída vazio, **When** a
-   execução é disparada, **Then** todos os arquivos da competência são gravados no diretório
-   e o resumo informa encontrados = baixados, ignorados = 0 e falhas = 0.
-2. **Given** que parte dos arquivos da competência já está no diretório, **When** a execução
-   é disparada, **Then** esses arquivos não são baixados de novo, são contabilizados como
-   ignorados e os demais são baixados.
-3. **Given** que um dos arquivos falha no download, **When** a execução termina, **Then** a
-   execução é marcada como falha e o resumo identifica o arquivo que falhou, além das
-   contagens de baixados, ignorados e falhas.
-4. **Given** uma execução concluída, **When** o operador consulta o resultado, **Then** o
-   registro mostra a competência, o diretório de saída, as contagens e a duração.
-5. **Given** a DAG carregada no Airflow, **When** ela é importada ou interpretada sem ser
-   disparada, **Then** nenhuma listagem, download ou acesso à rede é executado.
-
----
-
-### User Story 2 - Limitar a quantidade de arquivos no primeiro teste (Priority: P2)
-
-Como operador, quero informar um limite máximo de arquivos para validar o fluxo completo sem
-baixar uma competência inteira por engano.
-
-**Why this priority**: protege o primeiro uso e qualquer teste exploratório do custo de
-baixar gigabytes desnecessários. Depende apenas da listagem e do download já entregues pelo
-P1.
-
-**Independent Test**: disparar uma execução com limite 1 e verificar que exatamente um
-arquivo foi baixado, que o total encontrado continua sendo informado e que a execução está
-identificada como parcial.
+**Independent Test**: executar com uma amostra de competência e confirmar, para cada ZIP
+selecionado, um artefato Raw, um Parquet legível em Bronze, as colunas do schema central e a
+contagem de linhas correta.
 
 **Acceptance Scenarios**:
 
-1. **Given** uma competência com M arquivos e um limite N menor que M, **When** a execução é
-   disparada, **Then** no máximo N arquivos são baixados e o resumo informa o total
-   encontrado, o limite aplicado e que a execução é parcial.
-2. **Given** um limite N maior ou igual ao total de arquivos, **When** a execução é
-   disparada, **Then** todos os arquivos são processados e o limite não altera o resultado.
-3. **Given** um limite inválido (zero, negativo ou não inteiro), **When** a execução é
-   disparada, **Then** ela falha antes de listar ou baixar qualquer arquivo, com mensagem
-   explicativa.
-4. **Given** uma execução parcial com limite N, **When** ela é repetida com o mesmo limite,
-   **Then** os arquivos já presentes entre os N selecionados são ignorados e nenhum arquivo
-   fora dos N selecionados é baixado.
+1. **Given** uma competência válida publicada, **When** a DAG é disparada, **Then** cada ZIP
+   selecionado recebe um par de tarefas `baixar_raw → converter_bronze` e o resumo informa
+   estados, bytes, linhas e localizações de saída.
+2. **Given** que um download falha, **When** o run continua, **Then** `converter_bronze`
+   daquele arquivo não é executado, outras instâncias independentes podem concluir e o run
+   termina como falha.
+3. **Given** que uma conversão falha, **When** a tarefa termina, **Then** o ZIP Raw permanece,
+   nenhum Parquet parcial fica visível e outras conversões continuam independentemente.
+4. **Given** que a DAG é importada pelo parser, **When** não há trigger, **Then** nenhuma
+   conexão de rede, listagem, download ou conversão ocorre.
 
----
+### User Story 2 — Limitar os arquivos do primeiro teste (Priority: P2)
 
-### User Story 3 - Reexecutar a mesma competência sem duplicar trabalho (Priority: P3)
+Como operador, quero limitar o número de arquivos selecionados para validar o fluxo sem
+processar uma competência inteira por engano.
 
-Como operador, quero repetir a execução da mesma competência para continuar um download
-interrompido sem baixar de novo o que já está no diretório.
-
-**Why this priority**: downloads de competência são longos e sujeitos a interrupção; a
-reexecução idempotente evita custo de rede e tempo, e é pré-requisito para retentativas
-seguras.
-
-**Independent Test**: executar duas vezes a mesma competência; a segunda execução termina
-com zero downloads, todos os arquivos contabilizados como ignorados e os arquivos inalterados.
+**Independent Test**: disparar com limite 1 e confirmar que somente o primeiro arquivo da
+ordem estável ganha as tarefas de download e conversão.
 
 **Acceptance Scenarios**:
 
-1. **Given** todos os arquivos da competência já presentes, **When** a execução é disparada
-   novamente, **Then** nenhum byte é baixado, todos são contabilizados como ignorados e
-   nenhum arquivo é modificado.
-2. **Given** que uma execução anterior falhou no meio, **When** a execução é repetida,
-   **Then** apenas os arquivos ausentes são baixados e os já presentes permanecem intactos.
-3. **Given** um arquivo temporário deixado por uma execução interrompida, **When** a execução
-   é repetida, **Then** esse arquivo não é tratado como completo e é substituído.
+1. **Given** M arquivos listados e limite N menor que M, **When** o run é disparado, **Then**
+   exatamente N arquivos são selecionados e o resumo identifica a execução como parcial.
+2. **Given** que um arquivo selecionado já existe em Raw, **When** o run é disparado com
+   limite N, **Then** esse arquivo não é baixado novamente, conta dentro dos N e ainda segue
+   para conversão.
+3. **Given** um limite inválido, **When** o trigger é validado, **Then** o run falha antes de
+   acessar a RFB ou o armazenamento.
 
----
+### User Story 3 — Reexecutar sem baixar Raw novamente (Priority: P3)
 
-### Edge Cases
+Como operador, quero repetir ou retentar o processamento sem transferir de novo ZIPs
+preservados em Raw.
 
-- **Competência com formato inválido** (por exemplo `2026-2`, `02-2026`, `2026-13` ou texto):
-  a execução falha antes de qualquer acesso à fonte, com mensagem que mostra o formato
-  esperado (AAAA-MM).
-- **Competência válida mas sem arquivos** (mês ainda não publicado, competência futura ou
-  diretório vazio na fonte): a execução informa explicitamente que nenhum arquivo foi
-  encontrado e termina sem sucesso, para o operador não confundir com uma ingestão concluída.
-- **Falha ao listar os arquivos** (fonte indisponível, tempo esgotado ou falha na obtenção do
-  acesso público): a execução falha com mensagem que distingue o problema de listagem de um
-  problema de download; nenhum arquivo é baixado.
-- **Falha no download de um arquivo** (conexão interrompida, resposta de erro ou disco cheio):
-  a execução falha, o arquivo com problema é identificado e os arquivos já baixados
-  permanecem válidos.
-- **Arquivo existente porém vazio** (0 byte): não é considerado baixado; deve ser baixado
-  novamente.
-- **Arquivo temporário de execução anterior**: não é considerado completo; deve ser
-  substituído.
-- **Limite maior que o total de arquivos**: todos os arquivos são baixados e o resumo indica
-  que o limite não restringiu a execução.
-- **Diretório de saída inexistente**: é criado antes do download; se não puder ser criado ou
-  não houver permissão de escrita, a execução falha antes de baixar qualquer arquivo.
-- **Disco insuficiente**: a execução falha sem deixar arquivo parcial.
-- **Duas execuções simultâneas da mesma competência**: não podem corromper arquivos; um
-  arquivo em escrita por uma execução não pode ser lido como completo pela outra.
-- **Execução bem-sucedida com limite aplicado**: precisa ficar evidente que a competência
-  não foi baixada por completo.
+**Independent Test**: executar duas vezes o mesmo conjunto e confirmar que a segunda execução
+não baixa bytes Raw, mas pode reconstruir Bronze.
 
-## Requirements *(mandatory)*
+**Acceptance Scenarios**:
+
+1. **Given** que o ZIP Raw já existe e é válido, **When** a tarefa de download é repetida,
+   **Then** ela retorna a localização existente sem requisitar o conteúdo novamente à RFB.
+2. **Given** que Bronze está ausente ou a conversão anterior falhou, **When** o processamento
+   é repetido, **Then** o Parquet é gerado do Raw sem nova requisição de conteúdo à RFB.
+3. **Given** que existe um Parquet publicado, **When** a conversão é repetida, **Then** a
+   saída é substituída somente após a nova conversão terminar com sucesso.
+
+## Edge Cases
+
+- Competência inválida ou limite zero/negativo/não inteiro: falha antes de qualquer requisição.
+- Competência válida sem arquivos publicados: falha explícita como conjunto vazio.
+- RFB indisponível: erro de listagem sanitizado, sem token nos logs; nenhum arquivo é baixado.
+- Armazenamento local indisponível ou backend configurado inacessível: falha antes de iniciar
+  transferências.
+- ZIP Raw existente vazio ou corrompido: não é aceito como válido; deve ser baixado novamente
+  ou falhar de forma explícita.
+- ZIP com mais de um membro, nome sem schema conhecido ou encoding/layout inválido: falha
+  apenas da instância daquele arquivo.
+- Falha de disco temporário, gravação interrompida ou processo encerrado: nenhum artefato
+  parcial aparece na localização final; temporários locais são limpos.
+- Duas execuções da mesma competência: não podem sobrescrever artefatos parcialmente nem
+  competir pela mesma localização em escrita.
+- Execução com limite: o operador deve identificar que a competência não foi processada por
+  completo.
+
+### Tratamento de falhas por arquivo
+
+| Falha | Efeito naquele arquivo | Efeito nos demais | Estado do run |
+|---|---|---|---|
+| Listagem da competência | Nenhum arquivo é mapeado | Nenhum arquivo é processado | failed |
+| Download do ZIP | Nenhum artefato Raw válido é publicado; `converter_bronze` não executa | Outros arquivos continuam | failed |
+| Gravação Raw interrompida | Nenhum artefato parcial na localização final; temporário local removido | Outros arquivos continuam | failed |
+| Conversão do CSV/Parquet | Raw é preservado; nenhum Bronze parcial é publicado | Outras conversões continuam | failed |
+| ZIP inválido ou schema desconhecido | Apenas a conversão daquele arquivo falha | Outras conversões continuam | failed |
+| Armazenamento inacessível antes do processamento | Nenhum arquivo é processado | Nenhum arquivo é processado | failed |
+
+Uma falha nunca é contabilizada como sucesso. Retentativas são por tarefa/arquivo, sem exigir
+novo download quando o Raw já está íntegro.
+
+## Requirements
 
 ### Functional Requirements
 
-- **FR-001**: A execução MUST ser disparada apenas manualmente; a DAG MUST NOT ter
-  agendamento automático nesta etapa.
-- **FR-002**: A execução MUST receber uma competência no formato AAAA-MM e validar tanto o
-  formato quanto o mês (01 a 12) antes de qualquer acesso à fonte.
-- **FR-003**: Uma competência inválida MUST encerrar a execução com falha, mensagem
-  explicativa e sem listar ou baixar arquivos.
-- **FR-004**: A execução MUST listar os arquivos disponíveis na fonte da Receita Federal para
-  a competência informada.
-- **FR-005**: A execução MUST aceitar um limite opcional de arquivos, expresso como inteiro
-  positivo, que restringe quantos arquivos da competência serão baixados.
-- **FR-006**: O limite MUST selecionar os N primeiros arquivos em ordem determinística e
-  estável; arquivos já existentes entre os selecionados contam como ignorados e não liberam
-  vaga para outro arquivo.
-- **FR-007**: Um limite inválido (zero, negativo ou não inteiro) MUST encerrar a execução com
-  falha antes de listar ou baixar arquivos.
-- **FR-008**: Quando houver limite, o resumo MUST informar o total de arquivos encontrados, o
-  limite aplicado e que a execução foi parcial.
-- **FR-009**: A execução MUST gravar os arquivos em um diretório persistente, configurável
-  fora do código, acessível ao ambiente que executa a tarefa e capaz de sobreviver à
-  recriação do container.
-- **FR-010**: O diretório de saída MUST ser criado quando não existir; a execução MUST falhar
-  antes de baixar arquivos quando o diretório não puder ser criado ou não permitir escrita.
-- **FR-011**: A execução MUST reutilizar a lógica existente de listagem e download como
-  código chamável, sem executar listagem, download ou qualquer acesso à rede durante a
-  importação da DAG.
-- **FR-012**: O resumo da execução MUST registrar, no mínimo: competência, diretório de
-  saída, arquivos encontrados, arquivos selecionados (quando houver limite), arquivos
-  baixados, arquivos ignorados por já existirem, arquivos com falha, bytes transferidos e
-  duração.
-- **FR-013**: Qualquer falha de download MUST marcar a execução como falha, identificar o
-  arquivo afetado e preservar os arquivos já baixados com sucesso.
-- **FR-014**: Arquivo já presente e não vazio MUST ser ignorado, contabilizado e MUST NOT ser
-  sobrescrito nem baixado novamente.
-- **FR-015**: A gravação MUST ser atômica por arquivo; falha ou interrupção MUST NOT deixar
-  arquivo parcial nem arquivo temporário utilizável como se fosse completo.
-- **FR-016**: Competência válida sem nenhum arquivo na fonte MUST encerrar a execução sem
-  sucesso, com mensagem explícita de que nenhum arquivo foi encontrado.
-- **FR-017**: Reexecutar a mesma competência MUST ser idempotente: arquivos já presentes são
-  ignorados e somente os ausentes são baixados.
-- **FR-018**: Execuções simultâneas da mesma competência MUST NOT corromper arquivos; cada
-  arquivo MUST ser tratado de forma atômica e independente.
-- **FR-019**: O log MUST NOT expor o token de acesso à fonte nem credenciais; nomes de
-  arquivo, contagens e duração podem ser registrados.
-- **FR-020**: A execução MUST NOT realizar, nesta etapa, conversão para Parquet, publicação
-  em storage de objetos, agendamento automático, exposição web ou API.
+- **FR-001**: A feature MUST ter uma única DAG manual (`schedule=None`), executada por
+  competência, sem agendamento automático e sem uma DAG por arquivo.
+- **FR-002**: O trigger MUST aceitar competência `AAAA-MM` com mês 01–12 e limite opcional
+  inteiro positivo; ambos MUST ser validados antes de acessar a RFB ou o armazenamento.
+- **FR-003**: A execução MUST listar os arquivos da competência na RFB, filtrar diretórios e
+  ordená-los de forma determinística e estável.
+- **FR-004**: O limite MUST selecionar os N primeiros arquivos em ordem estável **antes** de
+  verificar a presença em Raw; um artefato Raw existente conta dentro dos N e não libera vaga
+  para o próximo arquivo.
+- **FR-005**: Para cada ZIP selecionado, o Airflow MUST criar um par de tarefas encadeadas
+  `baixar_raw → converter_bronze`, com estado e retry independentes por arquivo.
+- **FR-006**: `baixar_raw` MUST gravar o ZIP no armazenamento configurado, na localização
+  `raw/<AAAA-MM>/<nome-original>`, e MUST preservá-lo por competência.
+- **FR-007**: Um ZIP Raw existente e não vazio MUST ser reutilizado sem novo download; o
+  arquivo correspondente MUST seguir para `converter_bronze`.
+- **FR-008**: `converter_bronze` MUST ler o ZIP do Raw, usar o schema central, encoding
+  `latin1`, delimitador `;`, processamento em blocos e preservar os valores como texto.
+- **FR-009**: Cada ZIP MUST gerar exatamente um Parquet em
+  `bronze/<AAAA-MM>/<nome-base>.parquet`, no mesmo armazenamento configurado.
+- **FR-010**: Uma falha no download MUST impedir a conversão daquele arquivo; uma falha de
+  conversão MUST preservar o Raw e não publicar Bronze parcial. Arquivos independentes MUST
+  poder continuar.
+- **FR-011**: Se qualquer instância de arquivo falhar, o run MUST terminar como failed,
+  preservando os artefatos concluídos com sucesso e permitindo retry por arquivo.
+- **FR-012**: A publicação de Raw e Bronze MUST ser atômica na localização final do backend
+  configurado; falha ou interrupção MUST NOT expor artefato incompleto nem substituir uma
+  saída válida por uma incompleta.
+- **FR-013**: Arquivos intermediários MUST ficar em área temporária local da tarefa e ser
+  removidos ao término; XCom MUST transportar apenas localizações lógicas e metadados
+  pequenos, nunca conteúdo de arquivo.
+- **FR-014**: O resumo final MUST registrar competência, encontrados, selecionados, parcial,
+  estados por arquivo, bytes, duração, linhas processadas e localizações Raw/Bronze, sem
+  URL/token/credenciais.
+- **FR-015**: Importar ou parsear a DAG MUST NOT executar chamadas de rede, leitura de dados
+  ou conversão.
+- **FR-016**: A seleção do backend de armazenamento e seus parâmetros (caminho base, endpoint,
+  bucket e credenciais, quando aplicável) MUST vir de configuração disponível em todos os
+  containers Airflow e MUST NOT estar hardcoded. No modo local, o caminho base MUST ser
+  `/data`; em produção, a configuração MUST permitir selecionar Cloudflare R2 via API
+  compatível com S3.
+- **FR-017**: Esta feature MUST NOT adicionar camadas Silver/Gold, schedule automático,
+  frontend ou API. O provisionamento operacional do R2 e a migração de dados para ele ficam
+  fora do escopo; a seleção do backend R2 por configuração S3-compatível faz parte do escopo.
+- **FR-018**: `baixar_raw` e `converter_bronze` MUST acessar o armazenamento exclusivamente
+  por uma interface genérica, com operações de verificação, leitura, escrita atômica e
+  remoção, sem depender diretamente de filesystem, bucket ou provedor.
+- **FR-019**: No modo local, o backend de filesystem MUST usar `data/` na raiz do repositório,
+  montado como `/data` nos containers que executam tarefas, preservando
+  `raw/<AAAA-MM>/` e `bronze/<AAAA-MM>/`.
+- **FR-020**: Em produção, a seleção do backend MUST permitir Cloudflare R2 por meio de API
+  compatível com S3 e configuração externa, sem alterar a DAG, o download ou a conversão.
+
+```text
+DAG manual (uma por execução de competência)
+└── por ZIP selecionado: baixar_raw → converter_bronze
+    ├── baixar_raw:      raw/<AAAA-MM>/<nome-original>
+    └── converter_bronze: bronze/<AAAA-MM>/<nome-base>.parquet
+```
 
 ### Key Entities
 
-- **Competência**: mês e ano de referência no formato AAAA-MM; identificador primário de uma
-  execução e chave de idempotência.
-- **Execução de Download**: registro de uma tentativa manual, com competência, limite
-  aplicado, diretório de saída, status final, contagens e duração.
-- **Arquivo da RFB**: arquivo publicado pela Receita Federal para uma competência, com nome,
-  origem, tamanho e situação (baixado, ignorado ou falhou).
-- **Diretório de Saída**: local persistente configurável onde os arquivos brutos da
-  competência são mantidos entre execuções e recriações de container.
+- **Competência**: mês/ano `AAAA-MM`, chave da execução.
+- **Arquivo da RFB**: ZIP selecionado, com nome e localização remota sanitizada.
+- **Backend de Armazenamento**: implementação da interface genérica selecionada por
+  configuração; filesystem local (`data/`/`/data`) ou Cloudflare R2 via API S3.
+- **Artefato Raw**: ZIP original preservado sob `raw/<AAAA-MM>/<nome-original>` no backend
+  configurado.
+- **Artefato Bronze**: Parquet gerado do ZIP, sob `bronze/<AAAA-MM>/<nome-base>.parquet` no
+  backend configurado.
+- **Instância de Arquivo**: par de tarefas `baixar_raw → converter_bronze` de um ZIP.
+- **Resumo do Run**: metadados e estados das instâncias, guardados no Airflow; sem conteúdo
+  de arquivos.
 
-## Success Criteria *(mandatory)*
+## Success Criteria
 
 ### Measurable Outcomes
 
-- **SC-001**: 100% das execuções exibem, ao final, as contagens de arquivos encontrados,
-  baixados, ignorados e com falha.
-- **SC-002**: 0 arquivos parciais ou temporários permanecem no diretório de saída após
-  qualquer falha ou interrupção.
-- **SC-003**: Reexecutar uma competência já completa resulta em 0 bytes baixados e 100% dos
-  arquivos contabilizados como ignorados.
-- **SC-004**: Em 100% das execuções com limite N, no máximo N arquivos são baixados.
-- **SC-005**: Competência inválida falha sem executar nenhuma requisição à fonte.
-- **SC-006**: 100% das falhas de download resultam em execução com status de falha e com o
-  arquivo afetado identificado.
-- **SC-007**: Importar a DAG sem disparar a execução resulta em 0 acessos à rede e 0
-  downloads.
-- **SC-008**: 0 ocorrências do token de acesso à fonte aparecem no log da execução.
-- **SC-009**: Em uma execução parcial por limite, o operador identifica no resumo que a
-  competência não foi baixada por completo.
+- **SC-001**: 100% dos ZIPs selecionados exibem, no Airflow, as duas tarefas
+  `baixar_raw` e `converter_bronze`, com a segunda dependendo da primeira.
+- **SC-002**: 100% dos Parquets publicados são legíveis, correspondem ao schema do conjunto
+  e têm contagem de linhas igual à soma dos blocos processados.
+- **SC-003**: Em 100% das falhas de download, a conversão daquele arquivo não é executada e
+  as instâncias independentes ainda podem concluir; o run termina failed.
+- **SC-004**: Reexecução com Raw existente transfere zero bytes de conteúdo da RFB para esses
+  arquivos e ainda permite reconstruir Bronze.
+- **SC-005**: Em todo uso de limite N, no máximo N grupos de tarefas por arquivo são criados;
+  um Raw existente entre os N continua contando e é convertido.
+- **SC-006**: Nenhum artefato final parcial ou temporário local permanece após sucesso ou
+  falha tratada.
+- **SC-007**: Importar a DAG não faz I/O externo.
+- **SC-008**: Tokens e credenciais não aparecem em logs, erros ou XCom.
+- **SC-009**: Execução parcial por limite é identificada claramente no resumo.
+- **SC-010**: Toda falha por arquivo identifica o nome do arquivo e a etapa afetada (download
+  ou conversão).
+- **SC-011**: Em modo local, 100% dos artefatos Raw e Bronze são encontrados sob
+  `data/raw/<AAAA-MM>/` e `data/bronze/<AAAA-MM>/`, com os mesmos nomes e conteúdo do fluxo
+  validado.
+- **SC-012**: A troca do backend local pelo backend de produção ocorre apenas por
+  configuração, sem alterar DAG, download ou conversão e sem caminhos ou credenciais
+  hardcoded.
+- **SC-013**: Em produção, 100% das execuções configuradas para Cloudflare R2 usam a API
+  compatível com S3, sem alteração no fluxo de download/conversão.
 
 ## Assumptions
 
-- A fonte é o WebDAV público da Receita Federal já utilizado pelo código existente; o acesso
-  e o layout dos diretórios por competência permanecem os mesmos.
-- Competências são publicadas mensalmente; `2026-02` é uma competência publicada, usada como
-  referência de teste.
-- O ambiente que executa a tarefa tem acesso de rede à fonte e acesso de escrita ao
-  diretório persistente; código e dependências já estão disponíveis nesse ambiente (stack
-  Airflow provisionada no repositório).
-- O diretório de saída é configurado por variável de ambiente ou configuração versionada,
-  nunca hardcoded, e aponta para um volume persistente.
-- O refactor dos módulos existentes de listagem e download é permitido para torná-los
-  importáveis e chamáveis, preservando o comportamento atual (Princípio I da constituição).
-- "Já baixado" significa arquivo existente e com tamanho maior que zero; a fonte não oferece
-  verificação de integridade, então tamanho e conclusão atômica são os critérios adotados.
-- Competência válida sem arquivos é tratada como falha, e não como sucesso vazio, porque a
-  execução manual existe para ingerir dados e um resultado vazio indica competência errada,
-  ainda não publicada ou problema na fonte.
-- A execução é operada manualmente por um membro do time; a autenticação é a do próprio
-  Airflow.
-- Os arquivos brutos permanecem no diretório de saída nesta etapa; conversão, publicação e
-  consumo ficam para specs posteriores.
-- O volume de uma competência pode chegar a gigabytes; o limite de arquivos existe para
-  permitir testes baratos, não para produção.
+- No modo local, `data/` na raiz do repositório existe e é gravável; os containers que
+  executam tarefas o montam como `/data` e compartilham o mesmo conteúdo.
+- Em produção, o backend Cloudflare R2 é configurado por endpoint, bucket e credenciais
+  compatíveis com S3; o provisionamento desses recursos é operacional.
+- O backend configurado expõe os prefixos lógicos `raw/` e `bronze/`.
+- Raw é retido por competência, conforme a constituição 1.1.0; política de expiração será
+  definida separadamente.
+- "Raw existente válido" significa artefato presente e com tamanho maior que zero; a RFB não
+  oferece verificação de integridade, então presença e publicação atômica são os critérios.
+- O limite se aplica ao conjunto antes de verificar Raw existente; cada selecionado existente
+  ainda é convertido.
+- Cada ZIP contém exatamente um membro CSV; layouts diferentes falham apenas na conversão
+  daquele arquivo.
+- Airflow controla o paralelismo real das instâncias mapeadas pelos limites globais do
+  executor; a DAG não adiciona um cap próprio.
+- A conversão inicial só normaliza formato para Parquet e nomes de colunas do schema;
+  tipagem/limpeza pertencem à camada Silver futura.
+- O primeiro teste usa limite 1; competência completa pode consumir muitos recursos e não é o
+  teste inicial.

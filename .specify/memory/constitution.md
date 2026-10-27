@@ -1,5 +1,15 @@
 # dataquery-cnpj Constitution
 
+## Sync Impact Report — 2026-10-27
+
+- **Versão**: 1.0.0 → 1.1.0.
+- **Alteração aprovada**: arquivos da camada Raw são preservados por competência no object
+  storage para auditoria e reprocessamento; temporários locais continuam limitados à tarefa.
+- **Motivo**: a regra anterior de remover dados brutos após uma execução conflitava com a
+  arquitetura Medallion e com o requisito de reprocessar sem baixar novamente da RFB.
+- **Impacto**: aumenta o uso de storage conforme as competências retidas; a política de
+  expiração passa a ser decisão operacional explícita, não remoção automática após cada run.
+
 Pipeline de dados abertos da Receita Federal (CNPJ) voltado a análise: extração dos arquivos
 mensais publicados em WebDAV, conversão do CSV comprimido para Parquet e persistência em
 armazenamento de objetos (S3/MinIO), formando a base sobre a qual a camada de consulta
@@ -124,11 +134,13 @@ sem ganho mensurável custa dinheiro em tempo de execução e em manutenção.
 - O storage MUST usar apenas a API S3 (boto3), para que o mesmo código funcione em MinIO
   local e em object storage gerenciado.
 
-### Performance
+### Performance e retenção
 
 - O baseline do README é o piso de performance do projeto. Qualquer novo estágio MUST
   registrar seu custo e sua memória de pico.
-- Nenhum estágio MUST reter o arquivo bruto por mais de uma execução do pipeline.
+- Os artefatos da camada Raw MUST ser preservados por competência para auditoria e
+  reprocessamento. Sua expiração só pode ocorrer por uma política de retenção configurada e
+  documentada; tarefas MUST remover seus temporários locais ao concluir ou falhar.
 
 ## Fluxo de Trabalho, Revisão e Gates de Qualidade
 
@@ -164,4 +176,4 @@ sem ganho mensurável custa dinheiro em tempo de execução e em manutenção.
   temporários MUST ter ticket e prazo de remoção.
 - Divergência MUST ser corrigida antes da próxima feature do mesmo domínio.
 
-**Version**: 1.0.0 | **Ratified**: 2026-10-22 | **Last Amended**: 2026-10-22
+**Version**: 1.1.0 | **Ratified**: 2026-10-22 | **Last Amended**: 2026-10-27

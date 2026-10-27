@@ -1,4 +1,4 @@
-# Implementation Plan: Primeira DAG de Download de Dados CNPJ
+# Implementation Plan: Download e conversão CNPJ com Airflow
 
 **Branch**: `002-cnpj-download-dag` | **Date**: 2026-10-27 | **Spec**: [spec.md](./spec.md)
 
@@ -6,75 +6,84 @@
 
 ## Summary
 
-Entregar uma DAG manual do Airflow (`cnpj_download_manual`) que recebe uma competência
-`AAAA-MM`, lista os arquivos publicados pela RFB, baixa os arquivos para um diretório
-persistente e termina com um resumo observável (encontrados, selecionados, baixados,
-ignorados, falhas, bytes e duração). Qualquer falha de download faz a task falhar, preservando
-os arquivos concluídos.
+Manter a DAG manual `cnpj_download_manual` (uma execução por competência `AAAA-MM`) e o
+dynamic task mapping já definido: listagem em runtime e, para cada ZIP selecionado,
+`baixar_raw → converter_bronze`. Esta revisão de plano troca o armazenamento local de
+MinIO obrigatório por uma **interface genérica de armazenamento**, com dois backends
+selecionados só por configuração:
 
-A lógica deixa de rodar no import: o script atual vira uma função de domínio
-(`download_competencia`) com validação explícita, cliente RFB injetável e downloader assíncrono
-com escrita atômica. A DAG é uma casca fina, com import tardio do código de pipeline, para que
-o parser do Airflow não faça rede. O container ganha uma imagem com `webdavclient3`, o código
-montado somente leitura e um bind mount persistente para a saída.
+- **local**: filesystem em `data/` na raiz do repositório, montado como `/data` nos
+  containers que executam tarefas;
+- **produção**: Cloudflare R2 via API compatível com S3.
+
+Download e conversão não conhecem filesystem, bucket nem provedor. Localizações lógicas
+permanecem `raw/<AAAA-MM>/<nome-original>` e `bronze/<AAAA-MM>/<nome-base>.parquet`.
+XCom transporta só metadados pequenos. Silver/Gold, schedule, frontend, API e o
+provisionamento operacional do R2 ficam fora do escopo.
+
+O código e os testes atuais ainda falam em `S3ObjectStore`/MinIO; a implementação seguinte
+deve introduzir o protocolo, o backend de filesystem e a seleção por configuração, e
+desacoplar o Compose local do MinIO.
 
 ## Technical Context
 
-**Language/Version**: Python 3.13 (imagem `apache/airflow:3.3.2`, verificada em 3.13.15)
+**Language/Version**: Python 3.13 em Airflow 3.3.2 com CeleryExecutor.
 
-**Primary Dependencies**: Airflow 3.3.2 (CeleryExecutor, Postgres e Redis do compose atual);
-`webdavclient3==3.14.7` (já declarado no `requirements.txt`, ausente na imagem oficial);
-`aiohttp`, `requests`, `python-dotenv`, `psutil` (já fornecidos pela imagem); `fcntl` da
-biblioteca padrão para o lock de execução.
+**Primary Dependencies**: Airflow existente; `webdavclient3`, `aiohttp` e `pyarrow` na
+imagem de execução; `boto3` somente no backend S3/R2. Pytest na imagem de teste. Sem
+instalar o `requirements.txt` completo do projeto sobre a imagem Airflow. Nenhuma
+dependência nova além das já usadas (filesystem usa a stdlib).
 
-**Storage**: sistema de arquivos do host via bind mount, com um subdiretório por competência:
-`<CNPJ_DOWNLOAD_DIR>/<AAAA-MM>/<arquivo>`. Nenhum object storage nesta etapa.
+**Storage**: interface genérica (`exists`/`head`, leitura, escrita atômica, remoção) com
+prefixos lógicos `raw/` e `bronze/`. Backend local: diretório base `/data` (host:
+`data/`). Backend de produção: R2 via endpoint/bucket/credenciais S3-compatíveis.
+Seleção e parâmetros vêm de ambiente (`.env` ignorado), nunca hardcoded.
 
-**Testing**: `pytest` + `pytest-asyncio` + `pytest-cov`; servidor HTTP local (`aiohttp.web`)
-para downloads; teste de importação da DAG sem rede; integração com a RFB opt-in por
-`RUN_NETWORK_TESTS=1`; validação ponta a ponta com `airflow dags test`.
+**Testing**: pytest; unitários com fake da interface; filesystem temporário para o backend
+local; testes S3/R2 com cliente fake ou endpoint configurado (opt-in); DAG import sem I/O;
+E2E local com amostra em `data/` (sem MinIO obrigatório). Teste de rede RFB continua opt-in.
 
-**Target Platform**: Linux, containers do `docker compose` versionado no repositório.
+**Target Platform**: containers Docker Compose (Airflow workers/scheduler) em Linux; o
+mesmo código de domínio deve rodar em testes locais fora do Compose.
 
-**Project Type**: pipeline de dados em lote (single project) com orquestração Airflow; sem
-frontend, API web ou serviço adicional nesta etapa.
+**Project Type**: pipeline de dados / DAG Airflow (sem frontend nem API).
 
-**Performance Goals**: download em streaming com blocos de 1 MiB e concorrência 3; memória
-proporcional a `concorrência × chunk_size`, nunca ao tamanho do arquivo; registrar bytes e
-duração por execução para formar baseline do estágio.
+**Performance Goals**: conversão em streaming PyArrow (`open_csv` + `block_size` pela
+memória disponível); não carregar ZIP/CSV inteiros em RAM; baseline do README permanece o
+piso; medir pico de memória por worker no primeiro run com `limite=1`.
 
-**Constraints**: sem agendamento, Parquet, R2, web ou API (FR-020); token WebDAV nunca em log
-nem no resumo; escrita atômica por arquivo; diretório de saída persistente e configurável;
-`schedule=None`; `max_active_runs=1`; nenhum trabalho de rede no import da DAG.
+**Constraints**: trigger manual; limite aplicado antes da existência Raw; Raw retido por
+competência; Bronze substituído só após geração completa; parse da DAG sem I/O; logs sem
+token/credenciais; sem Silver/Gold, schedule, web ou API; sem provisionar conta/bucket R2
+nesta entrega.
 
-**Scale/Scope**: uma DAG, uma task, uma competência por execução; a competência `2026-02` tem
-37 arquivos (38 entradas na listagem, incluindo o diretório), podendo chegar a gigabytes. O
-limite opcional existe para testes baratos, não para produção.
+**Scale/Scope**: uma competência por run; dezenas de ZIPs por competência; primeiro teste
+operacional com `limite=1`.
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-| Princípio / Restrição | Verificação | Resultado |
-|---|---|---|
-| I. Estágios Desacoplados e Independentes | O estágio de download passa a ser `src.extracao_rfb.download_competencia`, chamável com parâmetros explícitos; competência, limite e diretório vêm da DAG/ambiente, não do código. O import não executa trabalho. `read_files.py` (conversão) permanece fora do escopo desta feature e é débito registrado para a spec de Parquet. | ✅ PASS |
-| II. Contrato de Dados Explícito e Schema-First | Esta etapa só transporta arquivos brutos; não interpreta CSV nem cria/duplica schema. `schema.py` não é tocado. | ✅ PASS (N/A ao escopo) |
-| III. Streaming e Uso Mensurável de Recursos | `download_files` grava cada chunk direto em arquivo temporário, sem carregar o arquivo em memória; concorrência e `chunk_size` são explícitos. | ✅ PASS |
-| IV. Falhas Visíveis e Execução Observável | Remove-se o `except:` genérico; cada arquivo vira `baixado`, `ignorado` ou `falhou` com motivo sanitizado. Falha agrega e levanta `DownloadError`; arquivos concluídos permanecem. Escrita em `.part` + `os.replace`. | ✅ PASS |
-| V. Testes Primeiro (NON-NEGOTIABLE) | O plano define a suíte antes da implementação (unitários, integração opt-in e e2e local). A implementação deve começar por testes falhando e ter aprovação do usuário, conforme o princípio. | ✅ PASS (gate de implementação) |
-| VI. Simplicidade e Dependências Disciplinadas | Nenhuma dependência nova além de `webdavclient3`, já usada e declarada. Remove-se `pyspark` não usado e a duplicata de `numpy`; `aiohttp` passa a ser declarado. Sem abstração sem segundo uso. | ✅ PASS |
-| Segurança e privacidade | O token aparece no path da URL; URLs não são logadas nem persistidas. Erros são sanitizados. A pasta de saída é local e não é servida por web; contém CPF bruto de `socios` e MUST NOT ser publicada. | ✅ PASS |
-| Contrato externo da RFB e idempotência | Competência é a chave da execução; listagem ordenada; arquivo existente não vazio é ignorado; reprocessar é idempotente. | ✅ PASS |
-| Infraestrutura via `docker compose` | Imagem customizada, código e saída montados no compose; nenhum passo manual fora do compose para executar a DAG. | ✅ PASS |
-| Performance / baseline | O estágio registra bytes e duração; não há meta de throughput porque o gargalo é a rede da RFB. O baseline de conversão não é afetado. | ✅ PASS |
-| Fluxo Spec Kit | Spec `002`, pesquisa, modelo, contratos e quickstart versionados; `tasks.md` virá de `/speckit.tasks`. | ✅ PASS |
+| Princípio | Verificação |
+|---|---|
+| I. Estágios desacoplados | Funções chamáveis recebem competência, nome e um `ObjectStore` injetado; nada executa no import. Backend escolhido só na fábrica de configuração. |
+| II. Schema-first | Conversão consulta o registro central (`schema.py`); sem lista de colunas duplicada nem inferência. |
+| III. Streaming | Download, abertura do CSV e escrita Parquet em blocos; scratch local de tarefa, não o arquivo final. |
+| IV. Falhas visíveis | Estado por arquivo, run `failed` se qualquer instância falhar, temporários removidos, localização final só com artefato completo. |
+| V. Test-first | Testes falhando da interface, filesystem, seleção de backend e DAG antes de cada mudança de comportamento. |
+| VI. Simplicidade | Protocolo justificado por **dois usos reais** (filesystem local e S3/R2). Sem MinIO no caminho local. `boto3` permanece só no backend S3. |
+| Segurança e retenção | Credenciais só no ambiente; logs/XCom sanitizados; Raw preservado por competência (constituição 1.1.0); `socios` não vai para bucket público. |
+| Infraestrutura | Compose local sobe Airflow e monta `data/` → `/data`. **Desvio**: a constituição 1.1.0 exige storage apenas via API S3/boto3 (MinIO local + object storage gerenciado). Esta feature, por FR-016–FR-020, usa filesystem local e R2 S3-compatível atrás da mesma interface. Ver Complexity Tracking. |
 
-**Resultado**: aprovado, sem violações que exijam `Complexity Tracking`.
+**Gate**: aprovado com o desvio de infraestrutura documentado e justificado pela spec
+atualizada (checklist de requisitos de 2026-10-27). Não há `NEEDS CLARIFICATION` de
+produto. Uma emenda futura da constituição deveria substituir “somente S3/MinIO” por
+“interface de armazenamento + backends configuráveis”, para eliminar o desvio permanente.
 
-**Reavaliação pós-design (2026-10-27)**: os artefatos de Fase 0/1 mantêm o resultado. O
-tratamento de `RemoteResourceNotFound` como competência vazia (e não como falha de listagem)
-foi incorporado ao cliente, ao modelo e aos contratos; o lock cobre a concorrência; a
-sanitização cobre URL/token em log, XCom e exceção. Nenhum gate novo foi violado.
+**Reavaliação pós-design**: `research.md` resolve seleção de backend, atomicidade por
+implementação e volume compartilhado local; `data-model.md` trata localizações lógicas
+independentes do provedor; `contracts/` define o protocolo e a fábrica; `quickstart.md`
+valida o fluxo em `data/` e a troca só por configuração. O TDD permanece obrigatório.
 
 ## Project Structure
 
@@ -82,102 +91,74 @@ sanitização cobre URL/token em log, XCom e exceção. Nenhum gate novo foi vio
 
 ```text
 specs/002-cnpj-download-dag/
-├── plan.md              # Este arquivo
-├── spec.md              # Requisitos
-├── research.md          # Fase 0: decisões e evidências
-├── data-model.md        # Fase 1: entidades, estados e layout
-├── quickstart.md        # Fase 1: roteiro de validação
-├── contracts/           # Fase 1: contrato da DAG, API chamável e CLI
+├── plan.md
+├── research.md
+├── data-model.md
+├── quickstart.md
+├── contracts/
 │   ├── README.md
 │   ├── dag-params.md
-│   └── download-api.md
-└── checklists/
-    └── requirements.md
+│   ├── download-api.md
+│   └── storage.md
+└── tasks.md              # /speckit-tasks — não gerado aqui
 ```
 
 ### Source Code (repository root)
 
 ```text
 src/
-├── extracao_rfb/
-│   ├── __init__.py
-│   ├── competencia.py            # validação AAAA-MM e seleção determinística
-│   ├── download_competencia.py   # orquestração, resumo e erros de domínio
-│   ├── extract_cnpj_files.py     # CLI fina (argparse), sem trabalho no import
-│   └── rfb_client.py             # listagem ordenada, cliente injetável, erros sanitizados
-├── download_utils/
-│   ├── __init__.py
-│   ├── download_files.py         # downloader async, atômico e com resultado estruturado
-│   └── redaction.py              # URLs/tokens fora de log e de mensagens de erro
-├── webdav/
-│   ├── auto_token.py             # timeout e erro explícito
-│   └── auto_webdav_client.py     # remove except genérico
-└── storage/minio.py              # inalterado (fora do escopo)
-
-airflow/
-├── Dockerfile                    # imagem base + alvo de testes
-├── requirements.txt              # overlay: somente o que a imagem Airflow não traz
-├── requirements-dev.txt          # pytest, pytest-asyncio, pytest-cov
-├── docker-compose.yaml           # build, PYTHONPATH, mount do código e da saída, serviço de teste
-├── dags/
-│   ├── smoke_test.py             # existente
-│   └── cnpj_download.py          # nova DAG manual
-└── README.md                     # operação da stack e da DAG
-
+├── storage/                 # protocolo + backends (filesystem, S3/R2) + fábrica
+├── extracao_rfb/            # listagem e download de um ZIP
+├── conversao/               # ZIP Raw → Parquet Bronze
+├── pipeline/                # orquestração pura e resumo
+├── download_utils/          # streaming/redação já existentes
+└── webdav/                  # cliente RFB já existente
+airflow/dags/cnpj_download.py
+data/                        # raiz local Raw/Bronze (gitignored, .gitkeep)
 tests/
-├── conftest.py
 ├── unit/
-│   ├── test_competencia.py
-│   ├── test_selection.py
-│   ├── test_download_files.py
-│   ├── test_download_competencia.py
-│   ├── test_redaction.py
-│   ├── test_rfb_client.py
-│   └── test_dag_import.py
-├── integration/
-│   └── test_rfb_listing.py       # opt-in RUN_NETWORK_TESTS=1
-└── e2e/
-    └── test_download_local_server.py
-
-pytest.ini                        # testpaths, asyncio_mode=auto, marker network, sem cache
-data/cnpj/                        # saída no host (gitignored), montada em /data/cnpj
-requirements.txt                  # lista canônica do pipeline (limpeza: pyspark, duplicata numpy)
+├── integration/             # filesystem local; S3/R2 opt-in
+├── e2e/
+└── fakes.py
 ```
 
-**Structure Decision**: projeto único de pipeline Python, com o Airflow como orquestrador
-externo e uma DAG fina. O código de domínio continua em `src/`, compartilhado entre CLI e DAG;
-o container monta a raiz do repositório somente leitura em `/opt/dataquery-cnpj` e usa
-`PYTHONPATH=/opt/dataquery-cnpj`. A saída fica fora da árvore de código, em `data/cnpj`, e é
-montada em `/data/cnpj`. Não há novo serviço de aplicação: Postgres, Redis e os componentes do
-Airflow já existentes bastam.
-
-## Decisões-Chave
-
-| # | Decisão | Efeito |
-|---|---|---|
-| D1 | Refatorar `extract_cnpj_files.py` em função + CLI; DAG importa a função dentro da task | Cumpre FR-011 e elimina trabalho no import |
-| D2 | Layout `data/cnpj/<AAAA-MM>/` com lock e limpeza de `.part` | Isola competências, permite idempotência e evita corrupção |
-| D3 | `download_files` retorna `DownloadReport` com resultado por arquivo; falhas agregadas ao final | Cumpre FR-012/FR-013 e Princípio IV |
-| D4 | Ordenação lexicográfica estável e `limite` = N primeiros; existentes contam como ignorados e não liberam vaga | Cumpre FR-006 e SC-004 |
-| D5 | Competência inválida, limite inválido, listagem vazia (inclusive 404 de competência não publicada) e falha de download falham a task | Cumpre FR-003/FR-007/FR-016 e deixa o erro visível |
-| D6 | Sanitização de URLs em toda mensagem de erro/log; `DownloadTarget.__repr__` esconde a URL | Cumpre FR-019 e SC-008 |
-| D7 | Imagem customizada só com o que falta (`webdavclient3`), código read-only e saída bind mount | Containers com código, dependências e diretório persistente |
-| D8 | Testes unitários com servidor local; integração de rede opt-in; DAG testada por import e `airflow dags test` | Cumpre Princípio V sem tornar a suíte dependente da RFB |
+**Structure Decision**: repositório único. A DAG só importa domínio dentro dos callables.
+`src/storage/` deixa de ser “cliente MinIO” e passa a ser o ponto único de persistência
+usado por extração e conversão. Compose monta `./data` em `/data` nos serviços que
+executam tarefas; MinIO deixa de ser dependência de subida do Airflow local.
 
 ## Complexity Tracking
 
-> Sem violações de constituição. O refactor dos módulos existentes é a correção do contrato
-> violado (execução no import e falhas silenciosas), prevista no Princípio I.
-
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| — | — | — |
+| Constituição: “storage MUST usar apenas a API S3 (boto3)” vs filesystem local + R2 | FR-016/019 exigem `data/`/`/data` no modo local, sem MinIO; FR-020 exige R2 S3-compatível em produção, sem mudar DAG/download/conversão | Manter MinIO local (plano anterior) contradiz a spec revisada e o checklist; dois códigos paralelos (paths vs boto3 nas tasks) quebraria FR-018 |
+| Protocolo `ObjectStore` (abstração extra) | Dois backends reais na mesma entrega | Um único backend S3 não cobre o modo local; um único filesystem não cobre R2 |
 
-## Referências
+## Topologia da DAG
 
-- Spec: [spec.md](./spec.md)
-- Pesquisa e evidências: [research.md](./research.md)
-- Modelo de dados: [data-model.md](./data-model.md)
-- Contratos: [contracts/](./contracts/)
-- Validação: [quickstart.md](./quickstart.md)
-- Constituição: `.specify/memory/constitution.md` v1.0.0
+Inalterada em relação ao incremento já entregue:
+
+1. `listar_arquivos`: valida competência/limite, confirma acesso ao backend configurado,
+   consulta a RFB, filtra diretórios, ordena nomes, aplica o limite **antes** de checar
+   Raw, devolve lista pequena `{nome}` para XCom.
+2. `pipeline_arquivo.expand(...)`:
+   - `baixar_raw`: reutiliza `raw/<competencia>/<nome>` se existir e tamanho > 0; senão
+     baixa em streaming para scratch e publica atomicamente no store.
+   - `converter_bronze`: lê o ZIP lógico Raw, converte em blocos, publica
+     `bronze/<competencia>/<nome-base>.parquet`.
+3. `consolidar_resumo`: agrega estados; falha o run se qualquer arquivo falhou.
+
+Paralelismo efetivo: CeleryExecutor / configuração Airflow; a DAG não adiciona cap.
+
+## Decisões de implementação
+
+| Decisão | Implementação |
+|---|---|
+| Interface | Protocolo mínimo: `head`/`exists`, `open`/`get` em stream, `put_atomic` (origem arquivo local), `delete`, `ping`/preflight. Chaves lógicas, nunca URI com credencial. |
+| Fábrica | `CNPJ_STORAGE_BACKEND=filesystem\|s3` (default local `filesystem`). S3 cobre R2. |
+| Filesystem | Base `CNPJ_DATA_ROOT` (`/data` nos containers; `data/` no host). Escrita: arquivo em `tmp/` da base ou `NamedTemporaryFile` no mesmo filesystem + `os.replace`. |
+| S3/R2 | Reutilizar a semântica atual de `S3ObjectStore` (PUT/multipart; chave final só após complete). Endpoint R2 e bucket vêm do ambiente. |
+| Compose local | Remover `depends_on` MinIO do Airflow; montar `../data:/data`; garantir `data/.gitkeep`. Scratch de tarefa continua em temp do worker, não em `data/raw`. |
+| Volume compartilhado | No Compose local, workers compartilham `/data`. Em produção R2, workers não compartilham disco; o store S3 é o canal. |
+| XCom | `nome`, chaves lógicas, status, bytes, linhas, duração. Sem path absoluto, URI S3 autenticada, token ou bytes. |
+| MinIO | Fora do caminho feliz local. Testes de integração S3 permanecem opt-in contra qualquer endpoint compatível (incluindo R2/MinIO se alguém configurar). |

@@ -63,9 +63,19 @@ def convert_compressed_csv_to_parquet(
     if not output_file:
         output_file = Path(filepath).with_suffix(".parquet")
     with zipfile.ZipFile(filepath) as zip:
-        namelist = zip.namelist()
-        if len(namelist) > 1:
-            raise RuntimeError(f"Expected exactly one file inside ZIP, found {len(namelist)}")
+        namelist = [name for name in zip.namelist() if not name.endswith("/")]
+        if len(namelist) != 1:
+            raise RuntimeError(
+                f"Expected exactly one file inside ZIP, found {len(namelist)}"
+            )
         filename = namelist[0]
+        if not filename.lower().endswith(".csv"):
+            raise RuntimeError(f"Expected a CSV inside ZIP, found {filename}")
         with zip.open(filename) as file:
-            return convert_csv_to_parquet(file, output_file, columns_names, chunk_size, encoding="latin1")
+            return convert_csv_to_parquet(
+                file,
+                output_file,
+                columns_names,
+                chunk_size,
+                encoding="latin1",
+            )

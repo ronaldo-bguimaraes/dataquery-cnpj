@@ -1,2 +1,5 @@
+# Local happy path: Airflow + filesystem storage under ./data (mounted as /data).
+# MinIO is no longer required. An S3-compatible endpoint can be started separately
+# when validating the opt-in S3/R2 path.
 include:
   - airflow/docker-compose.yaml
