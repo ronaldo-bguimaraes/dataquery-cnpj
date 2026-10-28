@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Estabelecimento {{ estabelecimento.cnpj_formatado }} · CNPJ{% endblock %}
+{% block content %}
+<section class="detalhe">
+  <p><a href="{{ back_url }}">Voltar para a lista</a></p>
+  <h1>Estabelecimento {{ estabelecimento.cnpj_formatado }}</h1>
+
+  <section>
+    <h2>Estabelecimento</h2>
+    <dl>
+      <dt>CNPJ</dt><dd>{{ estabelecimento.cnpj_formatado }}</dd>
+      <dt>Matriz/filial</dt><dd>{{ estabelecimento.matriz_filial_descricao or estabelecimento.identificador_matriz_filial or '—' }}</dd>
+      <dt>Nome fantasia</dt><dd>{{ estabelecimento.nome_fantasia or 'Não informado' }}</dd>
+      <dt>Situação cadastral</dt><dd>{{ estabelecimento.situacao_descricao or estabelecimento.situacao_cadastral or '—' }}{% if estabelecimento.data_situacao_cadastral_formatada %} em {{ estabelecimento.data_situacao_cadastral_formatada }}{% endif %}</dd>
+      <dt>Motivo da situação</dt><dd>{{ estabelecimento.motivo_descricao or estabelecimento.motivo_situacao_cadastral or '—' }}</dd>
+      <dt>Data de abertura</dt><dd>{{ estabelecimento.data_inicio_atividade_formatada or 'Não informada' }}</dd>
+      <dt>Endereço</dt>
+      <dd>
+        {% if estabelecimento.logradouro %}
+          {{ estabelecimento.tipo_logradouro }} {{ estabelecimento.logradouro }}, {{ estabelecimento.numero }}
+          {% if estabelecimento.complemento %} — {{ estabelecimento.complemento }}{% endif %}
+          — {{ estabelecimento.bairro or '—' }}, {{ estabelecimento.municipio_descricao or estabelecimento.municipio_codigo or '—' }} / {{ estabelecimento.uf or '—' }}
+          {% if estabelecimento.cep %} · CEP {{ estabelecimento.cep }}{% endif %}
+        {% else %}
+          Não informado
+        {% endif %}
+      </dd>
+      {% if estabelecimento.nome_cidade_exterior or estabelecimento.pais_descricao %}
+      <dt>Localização no exterior</dt><dd>{{ estabelecimento.nome_cidade_exterior or '—' }} / {{ estabelecimento.pais_descricao or estabelecimento.pais_codigo or '—' }}</dd>
+      {% endif %}
+    </dl>
+  </section>
+
+  <section>
+    <h2>CNAEs</h2>
+    {% if estabelecimento.cnaes %}
+    <ul>
+      {% for cnae in estabelecimento.cnaes %}
+      <li>{{ cnae.cnae_codigo }} — {{ cnae.descricao }}{% if cnae.principal %} <strong>(principal)</strong>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p>Nenhum CNAE registrado.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Contatos cadastrais</h2>
+    <p class="nota">Dados do cadastro da Receita Federal; podem estar ausentes ou desatualizados.</p>
+    <ul>
+      {% if estabelecimento.ddd_1 or estabelecimento.telefone_1 %}<li>Telefone 1: {{ estabelecimento.ddd_1 or '' }} {{ estabelecimento.telefone_1 or '' }}</li>{% endif %}
+      {% if estabelecimento.ddd_2 or estabelecimento.telefone_2 %}<li>Telefone 2: {{ estabelecimento.ddd_2 or '' }} {{ estabelecimento.telefone_2 or '' }}</li>{% endif %}
+      {% if estabelecimento.ddd_fax or estabelecimento.numero_fax %}<li>Fax: {{ estabelecimento.ddd_fax or '' }} {{ estabelecimento.numero_fax or '' }}</li>{% endif %}
+      {% if estabelecimento.correio_eletronico %}<li>E-mail: {{ estabelecimento.correio_eletronico }}</li>{% endif %}
+    </ul>
+    {% if not (estabelecimento.ddd_1 or estabelecimento.telefone_1 or estabelecimento.ddd_2 or estabelecimento.telefone_2 or estabelecimento.ddd_fax or estabelecimento.numero_fax or estabelecimento.correio_eletronico) %}
+    <p>Nenhum contato cadastrado.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Empresa</h2>
+    <dl>
+      <dt>Razão social</dt><dd>{{ estabelecimento.razao_social }}</dd>
+      <dt>CNPJ básico</dt><dd>{{ estabelecimento.empresa_cnpj_basico }}</dd>
+      <dt>Natureza jurídica</dt><dd>{{ estabelecimento.natureza_juridica_descricao or estabelecimento.natureza_juridica_codigo or '—' }}</dd>
+      <dt>Porte</dt><dd>{{ estabelecimento.porte_descricao or estabelecimento.porte_codigo or '—' }}</dd>
+      <dt>Capital social</dt><dd>{{ estabelecimento.capital_social_formatado }}</dd>
+      <dt>Qualificação do responsável</dt><dd>{{ estabelecimento.qualificacao_responsavel_descricao or estabelecimento.qualificacao_responsavel_codigo or '—' }}</dd>
+      {% if estabelecimento.ente_federativo %}<dt>Ente federativo</dt><dd>{{ estabelecimento.ente_federativo }}</dd>{% endif %}
+    </dl>
+  </section>
+
+  <section>
+    <h2>Simples Nacional e MEI</h2>
+    {% if estabelecimento.simples %}
+    <dl>
+      <dt>Simples Nacional</dt><dd>{{ estabelecimento.simples.simples_label }}{% if estabelecimento.simples.data_opcao_simples_formatada %} · opção em {{ estabelecimento.simples.data_opcao_simples_formatada }}{% endif %}{% if estabelecimento.simples.data_exclusao_simples_formatada %} · exclusão em {{ estabelecimento.simples.data_exclusao_simples_formatada }}{% endif %}</dd>
+      <dt>MEI</dt><dd>{{ estabelecimento.simples.mei_label }}{% if estabelecimento.simples.data_opcao_mei_formatada %} · opção em {{ estabelecimento.simples.data_opcao_mei_formatada }}{% endif %}{% if estabelecimento.simples.data_exclusao_mei_formatada %} · exclusão em {{ estabelecimento.simples.data_exclusao_mei_formatada }}{% endif %}</dd>
+    </dl>
+    {% else %}
+    <p>Sem registro de Simples Nacional ou MEI para esta empresa.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Sócios</h2>
+    {% if estabelecimento.socios %}
+    <div class="tabela-wrap">
+      <table>
+        <thead><tr><th>Nome</th><th>Documento</th><th>Qualificação</th><th>Entrada</th><th>País</th></tr></thead>
+        <tbody>
+          {% for socio in estabelecimento.socios %}
+          <tr>
+            <td>{{ socio.nome_socio or '—' }}</td>
+            <td>{{ socio.documento_socio_mascarado or '—' }}</td>
+            <td>{{ socio.qualificacao_socio_descricao or socio.qualificacao_socio_codigo or '—' }}</td>
+            <td>{{ socio.data_entrada_formatada or '—' }}</td>
+            <td>{{ socio.pais_descricao or socio.pais_codigo or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p>Nenhum sócio registrado para esta empresa.</p>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

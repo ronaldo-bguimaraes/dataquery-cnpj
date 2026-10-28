@@ -1,203 +1,325 @@
-# Modelo de Dados — Tela de Consulta de Dados CNPJ
+# Modelo de Dados — Explorador Visual de Dados CNPJ
 
-**Feature**: `001-cnpj-query-screen` · **Data**: 2026-10-22
-**Fontes**: [spec.md](./spec.md) (entidades de domínio) · [research.md](./research.md) D2 e D4
-(layout físico e índice de busca) · `schema.py` (schemas canônicos vigentes)
-
----
-
-## 1. Entidades de Domínio
-
-### 1.1 Empresa
-
-Registro cadastral de uma pessoa jurídica, identificado pelo CNPJ.
-
-| Campo | Tipo lógico | Obrigatório | Regras de validação | Origem |
-|---|---|---|---|---|
-| `cnpj_basico` | texto | sim | 8 dígitos; prefixo da base de registro na Receita | `schema.py::empresas` |
-| `razao_social` | texto | sim | 1–150 caracteres | `schema.py::empresas` |
-| `natureza_juridica` | código | sim |FK → `naturezas_juridicas.natureza_juridica_codigo` | `schema.py::empresas` |
-| `qualificacao_responsavel` | código | sim | FK → `qualificacoes_socios.qualificacao_socio_codigo` | `schema.py::empresas` |
-| `capital_social` | decimal | sim | ≥ 0; scale 2 | `schema.py::empresas` |
-| `porte` | enum | sim | conjunto fechado (microempresa, empresa de pequeno porte, médio, grande, Simples Nacional, pessoa física, outros) | `schema.py::empresas` |
-| `ente_federativo` | texto | não | texto livre | `schema.py::empresas` |
-
-- **Derivado**: `uf` (sigla de 2 letras) — **não existe** na tabela `empresas`; é deduzida do
-  dígito 9 do CNPJ (ramo): 0=SP, 1=RS, 2=MG, 3=ES, 4=BA, 5=PR, 6=SC, 7=PE, 8=CO, 9=DF.
-- **Relacionamentos**: 1 → N Estabelecimento · 1 → N Sócio · 1 → 1 Regime Tributário.
-- **Chave natural**: CNPJ completo (14 dígitos) = `cnpj_basico` + 2 dígitos de ramo + 1 dígito
-  de ordem + 1 dígito verificador.
-
-### 1.2 Estabelecimento
-
-Endereço operacional da empresa (matriz ou filial).
-
-| Campo | Tipo lógico | Obrigatório | Regras de validação | Origem |
-|---|---|---|---|---|
-| `estabelecimento_cnpj_basico` | texto | sim | FK → Empresa.`cnpj_basico` | `schema.py::estabelecimentos` |
-| `estabelecimento_cnpj_ordem` | texto | sim | 2 dígitos | idem |
-| `estabelecimento_cnpj_dv` | texto | sim | 1 dígito | idem |
-| `estabelecimento_identificador_matriz_filial` | enum | sim | 1 = matriz, 2 = filial | idem |
-| `estabelecimento_nome_fantasia` | texto | não | texto livre | idem |
-| `estabelecimento_situacao_cadastral` | código | sim | FK → `motivos.motivo_codigo` | idem |
-| `estabelecimento_data_situacao_cadastral` | data | sim | AAAA-MM-DD | idem |
-| `estabelecimento_data_inicio_atividade` | data | sim | AAAA-MM-DD | idem |
-| `estabelecimento_cnae_fiscal_principal` | código | sim | 7 dígitos; hierarquia 2.2.2-2 | idem |
-| `estabelecimento_cnae_fiscal_secundaria` | texto | não | lista separada por `;` de códigos CNAE | idem |
-| `estabelecimento_logradouro`, `_numero`, `_complemento`, `_bairro` | texto | — | endereço | idem |
-| `estabelecimento_cep` | texto | sim | 8 dígitos | idem |
-| `estabelecimento_uf` | enum | sim | sigla válida; **é a UF real do endereço** | idem |
-| `estabelecimento_municipio` | código | sim | FK → `municipios.municipio_codigo` | idem |
-| `estabelecimento_correio_eletronico` | texto | não | sem máscara em log | idem |
-| `estabelecimento_ddd_1`, `_telefone_1`, `_ddd_2`, `_telefone_2`, `_ddd_fax`, `_numero_fax` | texto | — | contato | idem |
-
-- **Relacionamentos**: N → 1 Empresa · N → 1 Município.
-- **Nota**: `estabelecimento_uf` (UF do endereço) pode divergir da UF derivada do CNPJ (UF do
-  registro). As duas são mantidas; a partição usa a UF do **estabelecimento** para esta tabela
-  e a UF derivada do CNPJ para `empresas` e `socios`.
-
-### 1.3 Sócio
-
-| Campo | Tipo lógico | Obrigatório | Regras de validação | Origem |
-|---|---|---|---|---|
-| `socio_cnpj_basico` | texto | sim | FK → Empresa.`cnpj_basico` | `schema.py::socios` |
-| `socio_identificador_socio` | código | sim | 1 = seriado, 2 = nome | idem |
-| `socio_nome_socio` | texto | condicional | obrigatório quando identificador = 2 | idem |
-| `socio_cnpj_cpf_socio` | texto | condicional | obrigatório quando identificador = 1; **sempre mascarado na saída** | idem |
-| `socio_qualificacao_socio` | código | sim | FK → `qualificacoes_socios.qualificacao_socio_codigo` | idem |
-| `socio_data_entrada_sociedade` | data | sim | AAAA-MM-DD | idem |
-| `socio_pais` | código | sim | FK → `paises.pais_codigo` | idem |
-| `socio_representante_legal` | código | sim | 0 = não, 1 = sim | idem |
-| `socio_nome_representante` | texto | condicional | obrigatório quando representante = 1 | idem |
-| `socio_qualificacao_representante_legal` | código | não | FK → `qualificacoes_socios` | idem |
-| `socio_faixa_etaria` | código | não | faixa etária | idem |
-
-- **Regra de privacidade (FR-017, FR-018)**: `socio_cnpj_cpf_socio` **nunca** sai da API em
-  claro. A máscara é aplicada na fronteira do serviço de consulta, antes da serialização, e o
-  valor original não entra em log.
-
-### 1.4 Regime Tributário
-
-| Campo | Tipo lógico | Regras | Origem |
-|---|---|---|---|
-| `simples_cnpj_basico` | texto | FK → Empresa | `schema.py::simples` |
-| `simples_opcao_simples` | data | AAAA-MM-DD; nulo se não optou | idem |
-| `simples_data_opcao_simples` | data | idem | idem |
-| `simples_data_exclusao_simples` | data | idem | idem |
-| `simples_opcao_mei` | data | idem | idem |
-| `simples_data_opcao_mei` | data | idem | idem |
-| `simples_data_exclusao_mei` | data | idem | idem |
-
-### 1.5 Tabelas de Apoio
-
-`paises` (código, descrição) · `municipios` (código, descrição) · `qualificacoes_socios`
-(código, descrição) · `naturezas_juridicas` (código, descrição) · `cnaes` (código, descrição) ·
-`motivos` (código, descrição). Todas com chave natural pelo código.
-
-### 1.6 Competência
-
-Mês e ano de referência dos dados (ex.: `2026-02`). Toda tela e toda resposta da API carregam a
-competência. É o identificador primário de uma execução do pipeline e a chave de versionamento
-dos artefatos no bucket.
-
-### 1.7 Filtro de Busca e Resultado de Busca
-
-- **Filtro de Busca**: `razao_social` (texto, opcional), `uf` (sigla, opcional), `municipio`
-  (código, opcional), `cnae` (código ou prefixo, opcional), `porte` (enum, opcional),
-  `ordenar_por` (critério), `pagina` (número), `tamanho_pagina` (1–100).
-- **Resultado de Busca**: lista paginada de **resumos de empresa** + total de correspondências +
-  competência consultada + trecho destacado da razão social (FR-013).
-- **Resumo de empresa** (projeção para a listagem): `cnpj`, `razao_social`, `razao_social_norm`
-  (derivado), `uf`, `municipio`, `porte`, `cnae_principal`, `similaridade` (só na busca fuzzy).
+**Feature**: `001-cnpj-query-screen` · **Data**: 2026-10-27
+**Fontes**: [spec.md](./spec.md) · [research.md](./research.md) · `schema.py`
+(nomes canônicos das colunas) · Parquets Bronze da competência `2026-10`
 
 ---
 
-## 2. Artefatos de Dados no Bucket
+## 1. Inventário de Origem
 
-### 2.1 Nomenclatura
+O inventário atual contém a competência `2026-10`. O pipeline publica um Parquet por ZIP
+em `bronze/<AAAA-MM>/<nome-base>.parquet`; todos os valores são gravados como texto pelo
+conversor atual.
+
+| Família | Arquivos esperados | Uso na consulta |
+|---|---|---|
+| Empresas | `Empresas0.parquet` … `Empresas9.parquet` | Cadastro da pessoa jurídica |
+| Estabelecimentos | `Estabelecimentos0.parquet` … `Estabelecimentos9.parquet` | Endereço, situação, CNAEs e contatos |
+| Sócios | `Socios0.parquet` … `Socios9.parquet` | Quadro societário |
+| Simples/MEI | `Simples.parquet` | Opção e datas de Simples/MEI |
+| Apoio | `Cnaes.parquet`, `Motivos.parquet`, `Municipios.parquet`, `Naturezas.parquet`, `Paises.parquet`, `Qualificacoes.parquet` | Descrições legíveis |
+
+**Total**: 37 arquivos. O loader MUST falhar de forma explícita se uma família obrigatória
+estiver ausente, se houver mais de um `Simples.parquet` ou se as colunas não corresponderem
+a `schema.py`.
+
+### 1.1 Formatos de origem observados
+
+| Campo | Formato | Tratamento |
+|---|---|---|
+| CNPJ básico | 8 dígitos | texto, chave da empresa |
+| CNPJ ordem | 4 dígitos | compõe o CNPJ completo |
+| CNPJ DV | 2 dígitos | compõe o CNPJ completo |
+| Datas | `AAAAMMDD`, `00000000` ou vazio | data; ausência vira `NULL` |
+| Capital social | texto com vírgula decimal (`5000,00`) | `NUMERIC(18,2)` |
+| CNAEs secundários | string separada por vírgula; o schema menciona `;` | dividir por `,` ou `;`, remover espaços e duplicatas |
+| Flags de Simples/MEI | `S`/`N` | booleano derivado |
+| CPF/CNPJ de sócio | pode vir já mascarado | máscara defensiva; nunca armazenar em claro |
+| UF | sigla de 2 letras | texto validado |
+| Município | código de 4 dígitos | junção com a tabela de apoio |
+
+## 2. Entidades de Domínio
+
+### 2.1 Competência
+
+Retrato mensal dos dados. O inventário atual tem `2026-10`; a fonte é a Receita Federal.
+A competência e a fonte acompanham todas as páginas que exibem dados. Não há comparação
+entre competências no MVP.
+
+### 2.2 Empresa
+
+Pessoa jurídica identificada pelo CNPJ básico.
+
+| Campo lógico | Origem | Regra |
+|---|---|---|
+| `cnpj_basico` | `empresa_cnpj_basico` | 8 dígitos; chave |
+| `razao_social` | `empresa_razao_social` | texto; exibição com redação defensiva de CPF |
+| `razao_social_normalizada` | derivado | minúsculas, sem acentos/pontuação, espaços colapsados |
+| `natureza_juridica_codigo` | `empresa_natureza_juridica` | junção com `naturezas_juridicas` |
+| `qualificacao_responsavel_codigo` | `empresa_qualificacao_responsavel` | junção com `qualificacoes_socios` |
+| `capital_social` | `empresa_capital_social` | decimal; ausência/inválido vira `NULL` |
+| `porte_codigo` | `empresa_porte` | catálogo de porte |
+| `ente_federativo` | `empresa_ente_federativo` | texto opcional |
+
+**Relacionamentos**: 1 empresa → N estabelecimentos; 1 → N sócios; 1 → 0..1 Simples/MEI.
+
+### 2.3 Estabelecimento
+
+Endereço operacional da empresa, identificado pelo CNPJ completo.
+
+| Campo lógico | Origem | Regra |
+|---|---|---|
+| `cnpj_completo` | derivado de básico + ordem + DV | 14 dígitos; chave |
+| `cnpj_basico` | `estabelecimento_cnpj_basico` | FK para empresa |
+| `identificador_matriz_filial` | `estabelecimento_identificador_matriz_filial` | `1` matriz, `2` filial |
+| `nome_fantasia` | `estabelecimento_nome_fantasia` | opcional |
+| `situacao_cadastral` | `estabelecimento_situacao_cadastral` | catálogo de situação |
+| `data_situacao_cadastral` | `..._data_situacao_cadastral` | data opcional |
+| `motivo_situacao_cadastral` | `..._motivo_situacao_cadastral` | junção com `motivos` |
+| `data_inicio_atividade` | `..._data_inicio_atividade` | data opcional |
+| `cnae_principal` | `..._cnae_fiscal_principal` | 7 dígitos; junção com `cnaes` |
+| `cnaes_secundarios` | `..._cnae_fiscal_secundaria` | lista; normalizada em `estabelecimento_cnaes` |
+| `tipo_logradouro`, `logradouro`, `numero`, `complemento`, `bairro` | campos `estabelecimento_*` | texto; podem ser vazios |
+| `cep` | `..._cep` | texto; pode ser vazio |
+| `uf` | `..._uf` | 2 letras; filtro e exibição |
+| `municipio_codigo` | `..._municipio` | junção com `municipios` |
+| `pais_codigo`, `nome_cidade_exterior` | `..._pais`, `..._nome_cidade_exterior` | exterior, quando aplicável |
+| `ddd_1`, `telefone_1`, `ddd_2`, `telefone_2`, `ddd_fax`, `numero_fax` | campos `estabelecimento_*` | contatos opcionais da RFB |
+| `correio_eletronico` | `..._correio_eletronico` | contato opcional da RFB |
+| `situacao_especial`, `data_situacao_especial` | campos `estabelecimento_*` | opcionais |
+
+**Relacionamentos**: N estabelecimentos → 1 empresa; N → 1 município; 1 → N CNAEs
+(principal e secundários).
+
+**Contatos**: são os informados no cadastro da Receita Federal. Podem estar ausentes,
+desatualizados ou incompletos; não são enriquecidos nem confirmados em tempo real.
+
+### 2.4 CNAE do estabelecimento
+
+Uma linha por código de CNAE associado ao estabelecimento.
+
+| Campo | Regra |
+|---|---|
+| `cnpj_completo` | FK para estabelecimento |
+| `cnae_codigo` | 7 dígitos |
+| `principal` | verdadeiro para o CNAE principal; falso para secundário |
+
+A chave é (`cnpj_completo`, `cnae_codigo`). O filtro de CNAE consulta esta tabela, portanto
+casa tanto o principal quanto qualquer secundário.
+
+### 2.5 Sócio
+
+Vínculo entre a empresa e uma pessoa ou entidade.
+
+| Campo lógico | Origem | Regra |
+|---|---|---|
+| `cnpj_basico` | `socio_cnpj_basico` | FK para empresa |
+| `identificador_socio` | `socio_identificador_socio` | código de origem |
+| `nome_socio` | `socio_nome_socio` | texto; pode ser vazio para alguns tipos |
+| `documento_socio_mascarado` | `socio_cnpj_cpf_socio` | sempre mascarado; nunca 11/14 dígitos em claro |
+| `qualificacao_socio_codigo` | `socio_qualificacao_socio` | junção com qualificações |
+| `data_entrada_sociedade` | `socio_data_entrada_sociedade` | data opcional |
+| `pais_codigo` | `socio_pais` | junção com países |
+| `representante_legal` | `socio_representante_legal` | documento mascarado do representante legal |
+| `nome_representante` | `socio_nome_representante` | opcional |
+| `qualificacao_representante_legal` | `socio_qualificacao_representante_legal` | opcional |
+| `faixa_etaria` | `socio_faixa_etaria` | código de origem; não é obrigatório exibir |
+
+**Privacidade**: o valor de `socio_cnpj_cpf_socio` não é armazenado em claro no banco de
+consulta. A máscara é aplicada no loader, independentemente de o arquivo de origem já vir
+mascarado. A apresentação também aplica redação defensiva a padrões de CPF em texto livre
+(por exemplo, razões sociais).
+
+### 2.6 Simples/MEI
+
+| Campo lógico | Origem | Regra |
+|---|---|---|
+| `cnpj_basico` | `simples_cnpj_basico` | FK para empresa |
+| `opcao_simples` | `simples_opcao_simples` | `S`/`N` |
+| `data_opcao_simples` | `simples_data_opcao_simples` | data opcional |
+| `data_exclusao_simples` | `simples_data_exclusao_simples` | data opcional |
+| `opcao_mei` | `simples_opcao_mei` | `S`/`N` |
+| `data_opcao_mei` | `simples_data_opcao_mei` | data opcional |
+| `data_exclusao_mei` | `simples_data_exclusao_mei` | data opcional |
+| `optante_simples` | derivado | flag `S` e sem exclusão até o fim da competência |
+| `optante_mei` | derivado | flag `S` e sem exclusão até o fim da competência |
+
+Empresa sem linha em `Simples.parquet` é tratada como não optante, sem erro.
+
+### 2.7 Tabelas de apoio
+
+| Tabela | Conteúdo |
+|---|---|
+| `cnaes` | código e descrição do CNAE |
+| `municipios` | código e descrição do município |
+| `naturezas_juridicas` | código e descrição |
+| `qualificacoes_socios` | código e descrição |
+| `motivos` | código e descrição do motivo de situação |
+| `paises` | código e descrição |
+
+### 2.8 Catálogo de domínio
+
+Códigos oficiais sem tabela correspondente nos Parquets:
+
+| Domínio | Códigos |
+|---|---|
+| Situação cadastral | `01` Nula, `02` Ativa, `03` Suspensa, `04` Inapta, `05` Ativa Não Regular, `08` Baixada |
+| Porte | `00` Não informado, `01` Microempresa, `03` Empresa de Pequeno Porte, `05` Demais |
+| Matriz/filial | `1` Matriz, `2` Filial |
+
+O catálogo é versionado no projeto e coberto por teste. Se um código desconhecido aparecer,
+a interface exibe o código bruto e registra a ocorrência, sem inventar um rótulo.
+
+## 3. Modelo Físico de Consulta (PostgreSQL)
+
+### 3.1 Metadados
+
+`query_metadata`:
+
+| Coluna | Tipo | Regra |
+|---|---|---|
+| `competencia` | `text` | `AAAA-MM`; chave |
+| `fonte` | `text` | `Receita Federal` |
+| `carregado_em` | `timestamptz` | instante da publicação |
+| `total_empresas` | `bigint` | contagem validada |
+| `total_estabelecimentos` | `bigint` | contagem validada |
+| `total_socios` | `bigint` | contagem validada |
+| `ativo` | `boolean` | competência exibida pela web |
+
+### 3.2 Tabelas base
+
+- `empresas(cnpj_basico PK, razao_social, razao_social_normalizada, natureza_juridica_codigo, qualificacao_responsavel_codigo, capital_social, porte_codigo, ente_federativo)`
+- `estabelecimentos(cnpj_completo PK, cnpj_basico FK, cnpj_ordem, cnpj_dv, identificador_matriz_filial, nome_fantasia, situacao_cadastral, data_situacao_cadastral, motivo_situacao_cadastral, nome_cidade_exterior, pais_codigo, data_inicio_atividade, cnae_principal, cnae_secundaria_texto, tipo_logradouro, logradouro, numero, complemento, bairro, cep, uf, municipio_codigo, ddd_1, telefone_1, ddd_2, telefone_2, ddd_fax, numero_fax, correio_eletronico, situacao_especial, data_situacao_especial)`
+- `estabelecimento_cnaes(cnpj_completo FK, cnae_codigo, principal, PK(cnpj_completo, cnae_codigo))`
+- `socios(id, cnpj_basico FK, identificador_socio, nome_socio, documento_socio_mascarado, qualificacao_socio_codigo, data_entrada_sociedade, pais_codigo, representante_legal, nome_representante, qualificacao_representante_legal, faixa_etaria)`
+- `simples(cnpj_basico PK, opcao_simples, data_opcao_simples, data_exclusao_simples, opcao_mei, data_opcao_mei, data_exclusao_mei, optante_simples, optante_mei)`
+- tabelas de apoio conforme §2.7 e catálogo conforme §2.8.
+
+### 3.3 Tabela de listagem
+
+`estabelecimentos_listagem` materializa os campos necessários à página principal e evita
+joins repetidos:
+
+| Coluna | Origem |
+|---|---|
+| `cnpj_completo` | estabelecimento |
+| `cnpj_basico` | estabelecimento |
+| `razao_social` | empresa |
+| `razao_social_normalizada` | empresa |
+| `nome_fantasia` | estabelecimento |
+| `situacao_codigo`, `situacao_descricao` | estabelecimento + catálogo |
+| `uf` | estabelecimento |
+| `municipio_codigo`, `municipio_descricao` | estabelecimento + município |
+| `cnae_principal_codigo`, `cnae_principal_descricao` | estabelecimento + CNAE |
+| `identificador_matriz_filial`, `matriz_filial_descricao` | estabelecimento + catálogo |
+| `data_inicio_atividade` | estabelecimento |
+| `porte_codigo`, `porte_descricao` | empresa + catálogo |
+| `optante_simples`, `optante_mei` | Simples/MEI derivado |
+
+### 3.4 Tabelas derivadas auxiliares
+
+- `municipios_por_uf(uf, municipio_codigo, municipio_descricao, PK(uf, municipio_codigo))`:
+  municípios efetivamente presentes na listagem, para o filtro dependente de UF.
+- `cnaes_presentes(cnae_codigo PK, descricao)`: CNAEs efetivamente presentes no inventário,
+  para o seletor/autocomplete.
+- `query_metadata` conforme §3.1.
+
+### 3.5 Índices mínimos
+
+| Tabela | Índice | Motivo |
+|---|---|---|
+| `estabelecimentos_listagem` | PK `cnpj_completo` | ordenação estável e detalhe |
+| `estabelecimentos_listagem` | `(uf, municipio_codigo)` | UF + município |
+| `estabelecimentos_listagem` | `(situacao_codigo)` | situação |
+| `estabelecimentos_listagem` | `(porte_codigo)` | porte |
+| `estabelecimentos_listagem` | `(data_inicio_atividade)` | intervalo de abertura |
+| `estabelecimentos_listagem` | `(cnpj_basico)` | junção com empresa/sócios/simples |
+| `estabelecimentos_listagem` | GIN `razao_social_normalizada` (`pg_trgm`) | busca literal por substring |
+| `estabelecimento_cnaes` | PK `(cnpj_completo, cnae_codigo)` | junção e deduplicação |
+| `estabelecimento_cnaes` | `(cnae_codigo)` | filtro por CNAE |
+| `empresas` | PK `cnpj_basico` | junções |
+| `socios` | `(cnpj_basico)` | detalhe |
+| `simples` | PK `cnpj_basico` | junção |
+| `municipios_por_uf` | PK `(uf, municipio_codigo)` | opções do filtro |
+| `cnaes_presentes` | PK `cnae_codigo` | opções do filtro |
+
+## 4. Transformações de Carga
+
+1. **CNPJ completo**: concatenar `estabelecimento_cnpj_basico` (8) +
+   `estabelecimento_cnpj_ordem` (4) + `estabelecimento_cnpj_dv` (2); validar 14 dígitos.
+2. **Datas**: converter `AAAAMMDD` para `date`; `00000000`, vazio ou inválido viram `NULL`
+   e incrementam um contador de descartes.
+3. **Capital social**: substituir vírgula por ponto e converter para `NUMERIC(18,2)`;
+   vazio vira `NULL`.
+4. **CNAEs**: dividir a string secundária por `,` ou `;`, remover espaços/aspas, manter
+   códigos de 7 dígitos, deduplicar e inserir em `estabelecimento_cnaes`; o principal entra
+   com `principal=true`.
+5. **Nome normalizado**: minúsculas, remoção de acentos (NFKD), pontuação convertida em
+   espaço e espaços colapsados; usado apenas para busca literal.
+6. **CPF**: aplicar máscara `***.***.***-**` em `socio_cnpj_cpf_socio`; nunca persistir o
+   valor original no banco de consulta.
+7. **Simples/MEI**: derivar `optante_simples` e `optante_mei` a partir da flag e da data de
+   exclusão, considerando o último dia da competência.
+8. **Rótulos**: juntar códigos de situação, porte, matriz/filial e tabelas de apoio;
+   códigos desconhecidos preservam o valor bruto e geram alerta de qualidade.
+9. **Listagem**: materializar `estabelecimentos_listagem` após as tabelas base.
+10. **Validação**: conferir contagens, chaves e referências; atualizar `query_metadata`;
+    publicar por troca atômica.
+
+## 5. Regras de Validação de Entrada
+
+| Entrada | Regra | Falha |
+|---|---|---|
+| CNPJ | 14 dígitos após remover máscara; dígitos verificadores válidos | 400, sem consulta |
+| UF | 2 letras entre as UFs presentes | 400 |
+| Município | código presente em `municipios_por_uf` para a UF | 400 |
+| CNAE | 7 dígitos e presente em `cnaes_presentes` | 400 |
+| Situação | código do catálogo | 400 |
+| Porte | código do catálogo | 400 |
+| Matriz/filial | `1` ou `2` | 400 |
+| Data | `AAAA-MM-DD`; inicial ≤ final | 400 |
+| Simples/MEI | `sim`/`nao`/`qualquer` | 400 |
+| Página | inteiro ≥ 1 | 400 |
+| Busca por nome | pelo menos 3 caracteres não vazios | 400 com orientação |
+| Parâmetro repetido | um valor por filtro | 400 |
+
+## 6. Transições de Estado
+
+### 6.1 Carga
 
 ```text
-s3://<bucket>/cnpj/competencia=<AAAA-MM>/tabela=<nome>/uf=<SIGLA>/part-<NNNNN>.parquet
+ocioso → staging → validado → publicado
+                 └→ falha → rollback (dados anteriores permanecem)
 ```
 
-Exemplo: `s3://<bucket>/cnpj/competencia=2026-02/tabela=empresas/uf=SP/part-00000.parquet`
+- A carga usa tabelas de staging e publica por troca atômica.
+- Falha em qualquer etapa não deixa a competência parcialmente visível.
+- Reexecutar a mesma competência substitui o retrato de forma idempotente.
 
-### 2.2 Tabelas Canônicas (já existentes, mantidas)
+### 6.2 Aplicação
 
-| Tabela | Particionamento | Ordenação dentro da partição | Origem |
-|---|---|---|---|
-| `empresas` | `uf` (derivada do CNPJ) | `cnpj_basico` | `schema.py::empresas` |
-| `estabelecimentos` | `estabelecimento_uf` | `estabelecimento_cnpj_basico`, `estabelecimento_cnpj_ordem` | `schema.py::estabelecimentos` |
-| `socios` | `uf` (derivada do CNPJ) | `socio_cnpj_basico`, `socio_identificador_socio` | `schema.py::socios` |
-| `simples` | `uf` (derivada do CNPJ) | `simples_cnpj_basico` | `schema.py::simples` |
-| `*_lookup` | — | `codigo` | `schema.py` (6 tabelas) |
+A aplicação é somente leitura. Cada requisição:
 
-### 2.3 Tabelas Derivadas (novas, produced pelo pipeline)
+```text
+validação dos parâmetros → consulta → renderização
+```
 
-| Tabela | Linhas | Colunas | Finalidade |
-|---|---|---|---|
-| `busca_documentos` | 1 por empresa | `cnpj_basico`, `razao_social`, `razao_social_norm`, `uf`, `municipio`, `porte`, `cnae_principal`, `trigramas` (lista de texto) | documento indexado + colunas de filtro + conjunto completo de trigramas |
-| `busca_postings` | 1 por (empresa, trigrama) | `cnpj_basico`, `trigrama`, `df` (frequência no corpus) | geração de candidatos por trigramas mais raros |
+Não há escrita, sessão de usuário, carrinho ou estado global mutável. O estado dos filtros
+vive na URL.
 
-**Regras de derivação**
-- `razao_social_norm` = `razao_social` em minúsculas, sem acento, sem pontuação, espaços
-  colapsados em um único espaço.
-- `trigramas` = janelas deslizantes de 3 caracteres sobre `razao_social_norm`, sem espaços;
-  nomes com menos de 3 caracteres geram o próprio texto como único trigrama.
-- `df` = número de documentos que contêm o trigrama (calculado no mesmo lote, por agregação).
-- `busca_postings` guarda apenas os trigramas **selecionados** de cada documento (os mais raros
-  dentro do próprio nome, limite de 8 por documento) para conter o tamanho; a lista completa
-  fica em `busca_documentos.trigramas` e é usada no ranqueamento.
+### 6.3 Consumidores futuros
 
-### 2.4 Layout Físico dos Parquet
+O read model (`estabelecimentos_listagem`, tabelas base e de apoio) é reutilizável por uma
+futura API para terceiros e por BI, mas esses consumidores não fazem parte do MVP. A API
+deverá reutilizar as mesmas consultas/validações e ter contrato, autenticação e rate
+limiting próprios; o Superset deverá usar papel somente leitura, metadados próprios e, em
+produção, uma réplica de leitura/base analítica.
 
-| Parâmetro | Valor | Por quê |
-|---|---|---|
-| `write_statistics` | `True` (hoje `False` — corrigir) | sem statistics não há zonemap → toda consulta vira varredura de 811 MB |
-| Ordenação | pela chave de consulta da tabela | poda por min/max dentro do row group |
-| Row group | 100 mil – 1 milhão de linhas | abaixo de 5 mil linhas o row group fica 5–10× mais lento |
-| Compressão | ZSTD | melhor razão bytes/latência em leitura remota |
-| Formato | Parquet | portável entre DuckDB, Spark, Trino e Iceberg; formato canônico do projeto |
-| Tamanho do arquivo | ~30 MB por partição de UF | consequência de 811 MB ÷ 27 UFs; aceitável porque o gargalo é o row group |
+## 7. Referências
 
-### 2.5 Normalização e Similaridade
-
-- **Similaridade de dice** entre o conjunto de trigramas da consulta e o do documento:
-  `dice = 2 · |A ∩ B| / (|A| + |B|)`, com `A` = trigramas da consulta, `B` = trigramas do
-  documento. Faixa 0–1.
-- **Ordenação**: `dice` decrescente → desempate por porte (maior capital social primeiro) →
-  desempate estável por CNPJ.
-- **Corte**: candidatos com `dice` abaixo do limiar (0,25) são descartados; o corte é
-  parametrizável e validado no quickstart (meta SC-007: ≥ 90% no top 10).
-
----
-
-## 3. Regras de Validação
-
-| Regra | Onde é aplicada | Mensagem ao usuário |
-|---|---|---|
-| CNPJ com 14 dígitos e dígitos verificadores válidos | borda da API, antes de consultar | "CNPJ inválido" (FR-002) |
-| CNPJ normalizado (só dígitos) para consulta | borda da API | — |
-| Sigla de UF válida (27) | borda da API | "UF inválida" |
-| Código CNAE com 7 dígitos, hierarquia `2.2.2-2` | borda da API | "CNAE inválido" |
-| `porte` dentro do conjunto fechado | borda da API | "Porte inválido" |
-| `municipio` existe na tabela de municípios | borda da API | "Município não encontrado" |
-| `tamanho_pagina` entre 1 e 100 | borda da API | "Página inválida" |
-| Competência existente no bucket | borda da API | "Competência não disponível" |
-| Ausência de sócios/CNAE secundário/Simples | consulta | seção vazia, sem erro |
-
----
-
-## 4. Transições de Estado
-
-Não aplicável: a feature é **somente leitura**. Nenhum artefato é alterado pela tela. A escrita
-ocorre exclusivamente no pipeline, por competência, de forma idempotente — reprocessar uma
-competência substitui seus artefatos de forma atômica.
-
----
-
-## 5. Referências
-
-- Contrato da API: [contracts/query-api.md](./contracts/query-api.md)
-- Contrato dos artefatos: [contracts/data-contracts.md](./contracts/data-contracts.md)
-- Decisões de layout: [research.md](./research.md) D2 e D4
+- [Contrato HTTP das páginas](./contracts/query-api.md)
+- [Contrato dos dados](./contracts/data-contracts.md)
+- [Pesquisa e decisões](./research.md)
+- [Especificação](./spec.md)
+- `schema.py` — nomes canônicos das colunas de origem

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Explorador de Dados CNPJ{% endblock %}</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body data-competencia="{{ competencia }}" data-fonte="{{ fonte }}">
+  <header class="topo">
+    <div class="marca">
+      <strong>Explorador de Dados CNPJ</strong>
+      <span>Competência {{ competencia }} · Fonte: {{ fonte }}</span>
+    </div>
+    <nav>
+      <a href="/estabelecimentos">Explorar estabelecimentos</a>
+    </nav>
+  </header>
+  <div class="aviso">
+    Retrato mensal da Receita Federal. Não é um dado em tempo real e não há comparação histórica nesta versão.
+  </div>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    Dados públicos do Cadastro Nacional da Pessoa Jurídica (CNPJ), competência {{ competencia }}.
+  </footer>
+</body>
+</html>

@@ -1,0 +1,92 @@
+name: dataquery-cnpj-query
+
+services:
+  query-db:
+    image: postgres:16
+    profiles: ["query", "query-test"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_QUERY_DB:-cnpj_query}
+      POSTGRES_USER: ${POSTGRES_QUERY_USER:-cnpj_query_loader}
+      POSTGRES_PASSWORD: ${POSTGRES_QUERY_PASSWORD:-change-me}
+      POSTGRES_QUERY_TEST_DB: ${POSTGRES_QUERY_TEST_DB:-cnpj_query_test}
+      CNPJ_QUERY_APP_PASSWORD: ${CNPJ_QUERY_APP_PASSWORD:-change-me}
+    ports:
+      - "127.0.0.1:${POSTGRES_QUERY_PORT:-55432}:5432"
+    volumes:
+      - query-db-volume:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  query-loader:
+    build:
+      context: ..
+      dockerfile: query/Dockerfile
+      target: base
+    profiles: ["query"]
+    env_file:
+      - ../.env
+    environment:
+      CNPJ_QUERY_DATABASE_URL: postgresql://${POSTGRES_QUERY_USER:-cnpj_query_loader}:${POSTGRES_QUERY_PASSWORD:-change-me}@query-db:5432/${POSTGRES_QUERY_DB:-cnpj_query}
+      CNPJ_QUERY_COMPETENCIA: ${CNPJ_QUERY_COMPETENCIA:-2026-10}
+      CNPJ_QUERY_SOURCE: ${CNPJ_QUERY_SOURCE:-Receita Federal}
+      CNPJ_DATA_ROOT: /data
+      CNPJ_STORAGE_BACKEND: ${CNPJ_STORAGE_BACKEND:-filesystem}
+    volumes:
+      - ${CNPJ_DATA_HOST_DIR:-../data}:/data:ro
+    depends_on:
+      query-db:
+        condition: service_healthy
+    command: ["python", "-m", "src.query.ingest.load"]
+
+  query-web:
+    build:
+      context: ..
+      dockerfile: query/Dockerfile
+      target: base
+    profiles: ["query"]
+    environment:
+      CNPJ_QUERY_DATABASE_URL: postgresql://cnpj_query_app:${CNPJ_QUERY_APP_PASSWORD:-change-me}@query-db:5432/${POSTGRES_QUERY_DB:-cnpj_query}
+      CNPJ_QUERY_COMPETENCIA: ${CNPJ_QUERY_COMPETENCIA:-2026-10}
+      CNPJ_QUERY_SOURCE: ${CNPJ_QUERY_SOURCE:-Receita Federal}
+      CNPJ_QUERY_PAGE_SIZE: ${CNPJ_QUERY_PAGE_SIZE:-25}
+    ports:
+      - "${CNPJ_QUERY_PORT:-8000}:8000"
+    depends_on:
+      query-db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  query-tests:
+    build:
+      context: ..
+      dockerfile: query/Dockerfile
+      target: test
+    profiles: ["query-test"]
+    environment:
+      CNPJ_QUERY_TEST_DATABASE_URL: postgresql://${POSTGRES_QUERY_USER:-cnpj_query_loader}:${POSTGRES_QUERY_PASSWORD:-change-me}@query-db:5432/${POSTGRES_QUERY_TEST_DB:-cnpj_query_test}
+      CNPJ_QUERY_DATABASE_URL: postgresql://cnpj_query_app:${CNPJ_QUERY_APP_PASSWORD:-change-me}@query-db:5432/${POSTGRES_QUERY_TEST_DB:-cnpj_query_test}
+      CNPJ_QUERY_APP_PASSWORD: ${CNPJ_QUERY_APP_PASSWORD:-change-me}
+      CNPJ_QUERY_COMPETENCIA: ${CNPJ_QUERY_COMPETENCIA:-2026-10}
+    depends_on:
+      query-db:
+        condition: service_healthy
+    volumes:
+      - ..:/opt/dataquery-cnpj:ro
+    command: ["pytest", "tests/query", "-q"]
+
+volumes:
+  query-db-volume:

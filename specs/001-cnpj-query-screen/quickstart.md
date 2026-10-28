@@ -1,204 +1,306 @@
-# Quickstart — Validação da Tela de Consulta de Dados CNPJ
+# Quickstart — Explorador Visual de Dados CNPJ
 
-**Feature**: `001-cnpj-query-screen` · **Data**: 2026-10-22
-**Objetivo**: guia executável para provar que a feature funciona ponta a ponta, requisito por
-requisito. Cada cenário cita o requisito da [spec](./spec.md) que valida.
-**Não contém**: código de implementação, migrações ou suítes de teste completas — essas coisas
-pertencem a [tasks.md](./tasks.md) e à fase de implementação.
+**Feature**: `001-cnpj-query-screen` · **Data**: 2026-10-27
+**Objetivo**: validar ponta a ponta a listagem, os filtros, a paginação e os detalhes da
+competência `2026-10`, sem exportação/download e com CPF mascarado.
+
+Este guia descreve **como validar**; a implementação e as tarefas ficam em
+[plan.md](./plan.md) e `tasks.md`. Contratos e modelo estão em
+[contracts/](./contracts/) e [data-model.md](./data-model.md).
 
 ---
 
 ## 1. Pré-requisitos
 
-| Item | Versão mínima | Como verificar |
-|---|---|---|
-| Python | 3.12 | `python --version` |
-| Node.js | 20 LTS | `node --version` |
-| Docker + Compose v2 | — | `docker compose version` |
-| Conta Cloudflare (R2 e Workers) | — | bucket criado, token com permissão de leitura e escrita |
-| `wrangler` | — | `npx wrangler --version` |
-
-```shell
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-## 2. Subir o ambiente local
-
-```shell
-cp .env.example .env      # preencha as credenciais do MinIO local
-docker compose up -d      # MinIO (dev) + serviço de consulta
-docker compose ps         # ambos em estado healthy
-```
-
-O MinIO local fala a mesma API S3 do R2, então **o mesmo SQL e o mesmo código** servem para
-desenvolvimento e produção — é o que garante a conformidade com a restrição de storage da
-constituição.
-
-## 3. Obter uma amostra dos dados
-
-```shell
-python -m src.indexacao.construir_indice \
-  --origem .tmp/2026-02 \
-  --destino .tmp/target \
-  --competencia 2026-02 \
-  --limite-linhas 50000
-```
-
-Saída esperada: arquivos `empresas/part-00000.parquet` e `busca_documentos/part-00000.parquet`
-em `.tmp/target`, com logs informando linha por tabela, duração e contagem de linhas.
-
-## 4. Verificar o layout físico (D2 — pré-requisito de tudo)
-
-```shell
-python -m src.indexacao.verificar_layout --destino .tmp/target
-```
-
-| Verificação | Resultado esperado |
+| Item | Verificação |
 |---|---|
-| `write_statistics` ativo | **true** em todos os arquivos (hoje o conversor grava `False`) |
-| Row groups por arquivo | entre 100 mil e 1 milhão de linhas por row group |
-| Ordenação interna | CNPJ em ordem crescente dentro de cada partição |
-| Partições | uma por UF, sem partição vazia |
+| Docker + Docker Compose v2 | `docker compose version` |
+| `.env` na raiz, criado a partir de `.env.example` | `test -f .env` |
+| Parquets Bronze da competência `2026-10` | `find data/bronze/2026-10 -maxdepth 1 -name '*.parquet' | wc -l` → `37` |
+| Pipeline Raw → Bronze já executado para `2026-10` | arquivos `Empresas*`, `Estabelecimentos*`, `Socios*`, `Simples` e apoio presentes |
 
-> Sem statistics, toda consulta vira varredura de 811 MB. **Este passo bloqueia os cenários 5
-> e 6** — se falhar, o desempenho medido não significa nada.
+O portal usa PostgreSQL 16 em um serviço próprio (`query-db`); ele **não** compartilha o
+banco de metadados do Airflow. A web não acessa os Parquets nem o bucket; somente o loader
+faz isso.
 
-## 5. Validar a API de consulta
+### Variáveis principais
 
-```shell
-curl -s localhost:8000/v1/saude | jq .
+```dotenv
+CNPJ_QUERY_COMPETENCIA=2026-10
+CNPJ_QUERY_DATABASE_URL=postgresql://cnpj_query_app:...@query-db:5432/cnpj_query
+CNPJ_QUERY_PAGE_SIZE=25
+CNPJ_STORAGE_BACKEND=filesystem
+CNPJ_DATA_ROOT=/data
 ```
 
-Esperado: `{"dados":{"status":"ok","competencia":"2026-02"}}`
+Para o modo S3/R2, o loader usa as mesmas variáveis `CNPJ_S3_*` do pipeline. A web nunca
+recebe credenciais de storage, apenas a URL do banco com papel somente leitura.
 
-### 5.1 Ficha por CNPJ (P1, FR-001 a FR-007)
+---
 
-```shell
-curl -s localhost:8000/v1/empresas/00038174000143 | jq '.dados.empresa.razao_social'
-```
-
-| Cenário | Entrada | Esperado |
-|---|---|---|
-| CNPJ válido existente | `00038174000143` | 200 com `empresa`, `estabelecimentos`, `socios`, `regime_tributario` |
-| CNPJ com máscara | `00.038.174/0001-43` | mesma resposta da entrada sem máscara |
-| CNPJ inválido | `00038174000144` | 400 `CNPJ_INVALIDO`, **sem** consulta ao motor |
-| CNPJ válido inexistente | `99999999999999` | 404 `EMPRESA_NAO_ENCONTRADA` |
-| Competência visível | qualquer uma | `competencia` presente na resposta |
-
-### 5.2 Mascaramento de CPF (FR-017, FR-018, SC-004)
+## 2. Subir o banco e carregar a competência
 
 ```shell
-curl -s localhost:8000/v1/empresas/00038174000143 | jq '.dados.socios[].cpf_socio'
+docker compose --profile query build query-web query-loader
+docker compose --profile query up -d query-db
+docker compose --profile query run --rm query-loader
 ```
 
-Esperado: **sempre** no formato `***456789**` — nunca 11 dígitos. Para o CPF mascarado não
-aparecer em log:
+O loader deve:
+
+1. descobrir as famílias de Parquets da competência;
+2. validar o schema de origem;
+3. carregar as tabelas de staging;
+4. derivar CNPJ completo, datas, CNAEs, nome normalizado, CPF mascarado e optantes;
+5. construir a listagem e os índices;
+6. validar contagens/referências;
+7. publicar `query_metadata` e trocar as tabelas de forma atômica.
+
+Saída esperada: log com competência, contagem por família, duração, memória e
+`publicado`. Uma falha deve deixar a competência anterior intacta e retornar código de erro
+diferente de zero.
+
+---
+
+## 3. Subir a aplicação
 
 ```shell
-grep -R "\d{11}" logs/ | grep -v "cpf_socio"   # esperado: nenhuma ocorrência
+docker compose --profile query up -d query-web
+docker compose ps
 ```
 
-### 5.3 Listagem por filtros (P2, FR-008 a FR-011)
+Esperado: `query-db` e `query-web` saudáveis. Abra:
+
+```text
+http://localhost:8000
+```
+
+A aplicação deve redirecionar para `/estabelecimentos`.
+
+---
+
+## 4. Validar o contrato HTTP
+
+### 4.1 Saúde
 
 ```shell
-curl -s "localhost:8000/v1/empresas?uf=DF&cnae=4631701&tamanho_pagina=20" | jq '.dados.paginacao'
+curl -s http://localhost:8000/health | jq .
 ```
 
-| Cenário | Esperado |
+Esperado:
+
+```json
+{
+  "status": "ok",
+  "competencia": "2026-10",
+  "fonte": "Receita Federal",
+  "banco": "ok"
+}
+```
+
+### 4.2 Competência e fonte
+
+Abra `/estabelecimentos` e confirme, no topo da página:
+
+- competência `2026-10`;
+- fonte `Receita Federal`;
+- aviso de que o dado é um retrato mensal, não tempo real;
+- nenhuma opção de comparação histórica ou troca de competência.
+
+### 4.3 Filtros combinados
+
+Na interface, aplique uma combinação como:
+
+| Filtro | Exemplo |
 |---|---|
-| Filtro combinado | só empresas que atendem a **todos** os filtros |
-| `filtros_aplicados` | devolve os filtros normalizados usados |
-| Paginação | `pagina=2` devolve a segunda página, com os mesmos filtros |
-| Ordenação | `ordenar_por=municipio&direcao=desc` reordena a lista |
-| CNAE hierárquico (FR-009) | `cnae=46` retorna empresas de CNAE 46xxx |
-| Sem resultado | 200 com `itens: []` e `total: 0` (não é erro) |
-| `tamanho_pagina=500` | 400 `PARAMETRO_INVALIDO` |
+| UF | `SP` |
+| Situação | `02` (Ativa) |
+| CNAE | um código de 7 dígitos existente |
+| Porte | `01`, `03` ou `05` |
+| Matriz/filial | `1` ou `2` |
+| Data de abertura | intervalo válido |
+| Simples/MEI | `sim`/`nao`/`qualquer` |
 
-### 5.4 Busca fuzzy (P2, FR-012 a FR-014, SC-007)
+Esperado:
 
-```shell
-curl -s "localhost:8000/v1/busca/razao-social?termo=BRASLIA" | jq '.dados.itens[0]'
-```
+- a lista contém somente estabelecimentos que atendem a **todos** os filtros;
+- a contagem total é exibida e é maior ou igual ao número de linhas da página;
+- o CNAE casa principal **ou** secundário;
+- a página atual é indicada;
+- os filtros permanecem preenchidos.
 
-| Cenário | Esperado |
+### 4.4 Paginação
+
+1. Aplique filtros que retornem mais de 25 registros.
+2. Navegue para a próxima página.
+3. Volte para a anterior.
+
+Esperado: os filtros permanecem, não há registros repetidos/omitidos e a página atual é
+indicada. Alterar um filtro deve voltar para a página `1`.
+
+### 4.5 Estado vazio
+
+Use uma combinação válida sem correspondências (por exemplo, uma UF com um CNAE improvável).
+
+Esperado:
+
+- contagem `0`;
+- mensagem clara;
+- ação para limpar os filtros;
+- nenhum erro HTTP.
+
+### 4.6 Validações
+
+| Entrada | Esperado |
 |---|---|
-| Typo | a empresa pretendida aparece entre os 10 primeiros |
-| Normalização | `BRASILIA`, `brasília` e `BRASÍLIA` devolvem os mesmos candidatos |
-| `trecho_destacado` | preenchido e indicando o trecho que casou |
-| `similaridade` | valor entre 0 e 1, ordenação decrescente |
-| Termo < 3 caracteres | 400 `PARAMETRO_INVALIDO` |
-| `total_candidatos` | maior ou igual ao número exibido |
+| CNPJ com letra ou dígito verificador inválido | mensagem explicativa, sem consulta |
+| CNPJ válido inexistente | página de não encontrado / lista vazia, sem erro interno |
+| Data inicial > data final | mensagem explicativa, sem consulta |
+| Município incompatível com a UF | ajuste/validação, sem filtro impossível |
+| CNAE com formato inválido | mensagem explicativa |
+| Busca por nome com menos de 3 caracteres | orientação para ampliar o termo |
+| Busca com erro de digitação | resultado vazio; **não** há correção automática |
 
-**Meta de qualidade (SC-007)**: com a lista de 50 casos de teste com erro de digitação, a
-empresa pretendida aparece no top 10 em **≥ 90%** dos casos.
+### 4.7 Detalhe do estabelecimento
 
-### 5.5 Lookups e competências
+Clique em um resultado e confirme:
 
-```shell
-curl -s localhost:8000/v1/lookups/municipio?uf=DF | jq '.dados.itens | length'
-curl -s localhost:8000/v1/competencias | jq '.dados.atual'
+- CNPJ completo, matriz/filial, situação e data da situação;
+- nome fantasia, quando houver;
+- endereço completo, UF e município;
+- data de abertura;
+- CNAE principal e secundários;
+- contatos cadastrais, quando disponíveis, identificados como dados da Receita Federal e
+  sujeitos a ausência/desatualização;
+- dados da empresa: razão social, natureza jurídica, porte, capital social, qualificação do
+  responsável e ente federativo, quando aplicável;
+- Simples/MEI com datas ou indicação de ausência;
+- sócios, quando houver, com documento sempre mascarado;
+- link de retorno que preserva filtros e página.
+
+### 4.8 Privacidade e escopo
+
+- Nenhum CPF aparece com 11 dígitos em tela, mensagem de erro ou log.
+- Nenhuma tela oferece botão/link de exportação, download ou CSV.
+- Nenhuma tela exibe Lucro Real/Presumido/Arbitrado, PGFN, CNO ou contato enriquecido.
+- Nenhuma tela exibe comparação histórica.
+
+### 4.9 Teste de usabilidade (SC-004)
+
+Recrute participantes **sem perfil predefinido** (não presuma analista, contador ou
+desenvolvedor). Peça que realizem, sem ajuda:
+
+1. filtrar por UF e CNAE;
+2. abrir um estabelecimento;
+3. identificar a situação cadastral e a opção pelo Simples/MEI.
+
+Registre sucesso na primeira tentativa. Meta: **≥ 90%** dos participantes concluem a tarefa
+sem ajuda. O roteiro e o resultado devem ser anexados à validação da feature.
+
+Consultas SQL de auditoria (execute no banco de consulta):
+
+```sql
+-- CPF em claro não deve existir
+SELECT count(*) FROM socios
+WHERE documento_socio_mascarado ~ '^[0-9]{11}$';
+
+-- Metadados da competência ativa
+SELECT competencia, fonte, total_empresas, total_estabelecimentos, total_socios
+FROM query_metadata WHERE ativo;
 ```
 
-Esperado: lista de municípios da UF e a competência mais recente disponível.
+Esperado: `0` para a primeira consulta e a competência `2026-10` na segunda.
 
-## 6. Validar a camada web
+---
 
-```shell
-cd web
-npx vinext check          # se usar vinext; `npx opennextjs-cloudflare build` se usar OpenNext
-npx wrangler deploy --dry-run   # confere o bundle e o consumo de CPU/memória
-```
-
-| Cenário | Esperado |
-|---|---|
-| Busca por CNPJ na UI | abre a ficha com cadastro, endereços, sócios e regime |
-| Competência na tela | mês/ano visível em toda tela com dados (SC-005) |
-| Busca com filtros | lista paginada, com o total de resultados |
-| Erro do motor | mensagem compreensível, sem detalhe interno |
-| CPF na tela | sempre mascarado |
-| Acessibilidade do bundle | dentro de 64 MiB descomprimidos e 128 MB de memória |
-
-> O `wrangler deploy --dry-run` é o que evidencia se o plano gratuito (10 ms de CPU) dá conta
-> do SSR. Se não der, o plano B (auto-hospedar o Next.js na VM) está registrado em D5.
-
-## 7. Medir desempenho (SC-002, SC-003)
+## 5. Executar a suíte
 
 ```shell
-python -m scripts.medir_desempenho \
-  --endpoint http://localhost:8000 \
-  --cnpj 00038174000143 \
-  --filtros "uf=DF&cnae=4631701" \
-  --requisicoes 50
+docker compose --profile query-test run --rm query-tests pytest tests/query -q
 ```
+
+Cobertura esperada:
+
+- unitários: normalização, datas, capital, CNAEs, máscara de CPF, optantes, validação;
+- integração: carga em PostgreSQL, contagem, filtros, paginação, detalhe e retorno;
+- contrato: páginas, parâmetros, estados de erro e ausência de exportação/download;
+- E2E: fluxo listagem → detalhe → retorno com filtros preservados.
+
+E2E opcional:
+
+```shell
+docker compose --profile query-test run --rm query-tests \
+  pytest tests/query/e2e -q
+```
+
+---
+
+## 6. Benchmark
+
+Com a competência completa carregada:
+
+```shell
+docker compose --profile query run --rm query-web \
+  python -m src.query.benchmark --requisicoes 50
+```
+
+Registre no README/plano:
 
 | Métrica | Alvo |
 |---|---|
-| `GET /v1/empresas/{cnpj}` — p95 | ≤ 3 s |
-| `GET /v1/empresas` (filtrada) — p95 | ≤ 5 s |
-| Tempo até a resposta na UI | ≤ 60 s (SC-001, SC-008) |
+| `GET /estabelecimentos` filtrada — p95 | ≤ 5 s |
+| `GET /estabelecimentos/{cnpj}` — p95 | ≤ 3 s |
+| Carga da competência — duração e memória de pico | registrar |
+| Contagem sem filtros | usar `query_metadata` |
+| Contagem filtrada | `COUNT(*)` indexado |
 
-O relatório gerado MUST ser anexado ao README, junto do baseline de conversão já existente —
-a constituição exige que qualquer novo estágio registre seu custo e sua memória de pico.
+Se o alvo não for atingido, ajustar índices/consultas e repetir; não adicionar motor de
+busca ou cache distribuído sem uma decisão registrada.
 
-## 8. Executar a suíte
+---
+
+## 7. Encerrar
 
 ```shell
-pytest                                   # pipeline, serviço de consulta, contrato da API
-cd web && npm test                       # componentes e route handlers
+docker compose down
 ```
 
-Critérios de saída (gates do plano):
+Para remover também o volume do banco de consulta (não afeta `data/`):
 
-- [ ] Todos os testes passam
-- [ ] `write_statistics` verificado como `true` (§4)
-- [ ] Nenhum CPF em claro em resposta ou em log (§5.2)
-- [ ] Medidas de p95 dentro do alvo (§7)
-- [ ] SC-007 ≥ 90% no top 10 com typos (§5.4)
-- [ ] Nenhuma implementação de exportação ou painel de agregados (FR-019)
+```shell
+docker compose down -v
+```
 
-## 9. Referências
+---
 
-- Requisitos: [spec.md](./spec.md) · [checklists/requirements.md](./checklists/requirements.md)
-- Plano: [plan.md](./plan.md) · Pesquisa: [research.md](./research.md)
-- Modelo: [data-model.md](./data-model.md) · Contratos: [contracts/](./contracts/)
+## 8. Critérios de aceite da validação
+
+- [ ] Competência `2026-10` e fonte `Receita Federal` visíveis em todas as páginas de dados.
+- [ ] Filtros combináveis funcionam e atualizam contagem/lista.
+- [ ] CNAE filtra principal e secundário.
+- [ ] Paginação preserva filtros e não repete/omite registros.
+- [ ] Estado vazio e validações são claros.
+- [ ] Detalhe exibe estabelecimento, empresa, sócios e Simples/MEI.
+- [ ] Retorno do detalhe preserva filtros e página.
+- [ ] CPF sempre mascarado; nenhum CPF completo em log.
+- [ ] Nenhuma exportação/download/CSV.
+- [ ] Nenhum dado de fonte externa ou comparação histórica.
+- [ ] ≥ 90% dos participantes do teste de usabilidade concluem a tarefa principal.
+- [ ] p95 dentro dos alvos e carga registrada.
+
+---
+
+## 9. Evolução futura
+
+API pública e dashboards de BI não são validados neste quickstart. A arquitetura mantém o
+PostgreSQL e o read model desacoplados para que esses consumidores possam ser adicionados
+em features próprias; consulte “Future Evolution” em [plan.md](./plan.md).
+
+## 10. Referências
+
+- [Especificação](./spec.md)
+- [Plano](./plan.md)
+- [Pesquisa](./research.md)
+- [Modelo de dados](./data-model.md)
+- [Contratos](./contracts/)
+- [Checklist de requisitos](./checklists/requirements.md)

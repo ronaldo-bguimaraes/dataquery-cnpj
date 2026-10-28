@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Explorar estabelecimentos · CNPJ{% endblock %}
+{% block content %}
+<section class="filtros" aria-labelledby="titulo-filtros">
+  <h1 id="titulo-filtros">Explorar estabelecimentos</h1>
+  {% if notice %}<p class="aviso-inline" role="status">{{ notice }}</p>{% endif %}
+  <form method="get" action="/estabelecimentos">
+    <div class="campo campo-largo">
+      <label for="q">CNPJ ou nome</label>
+      <input id="q" name="q" value="{{ filtros.q or '' }}" placeholder="CNPJ completo ou parte do nome" autocomplete="off">
+      <small>CNPJ com ou sem máscara, ou pelo menos 3 caracteres do nome. Não há correção de erros de digitação.</small>
+    </div>
+    <div class="campo">
+      <label for="situacao">Situação cadastral</label>
+      <select id="situacao" name="situacao">
+        <option value="">Todas</option>
+        {% for item in options.situacoes %}
+        <option value="{{ item.codigo }}" {% if filtros.situacao == item.codigo %}selected{% endif %}>{{ item.descricao }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo">
+      <label for="uf">UF</label>
+      <select id="uf" name="uf">
+        <option value="">Todas</option>
+        {% for uf in options.ufs %}
+        <option value="{{ uf }}" {% if filtros.uf == uf %}selected{% endif %}>{{ uf }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo">
+      <label for="municipio">Município</label>
+      <select id="municipio" name="municipio">
+        <option value="">Todos</option>
+        {% for item in options.municipios %}
+        <option value="{{ item.codigo }}" {% if filtros.municipio == item.codigo %}selected{% endif %}>{{ item.descricao }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo">
+      <label for="cnae">CNAE principal ou secundário</label>
+      <input id="cnae" name="cnae" value="{{ filtros.cnae or '' }}" inputmode="numeric" placeholder="7 dígitos" maxlength="7" list="cnaes-disponiveis">
+      <datalist id="cnaes-disponiveis">{% for item in options.cnaes %}<option value="{{ item.codigo }}">{{ item.descricao }}</option>{% endfor %}</datalist>
+    </div>
+    <div class="campo">
+      <label for="porte">Porte</label>
+      <select id="porte" name="porte">
+        <option value="">Todos</option>
+        {% for item in options.portes %}
+        <option value="{{ item.codigo }}" {% if filtros.porte == item.codigo %}selected{% endif %}>{{ item.descricao }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo">
+      <label for="matriz_filial">Matriz/filial</label>
+      <select id="matriz_filial" name="matriz_filial">
+        <option value="">Todos</option>
+        {% for item in options.matriz_filial %}
+        <option value="{{ item.codigo }}" {% if filtros.matriz_filial == item.codigo %}selected{% endif %}>{{ item.descricao }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo">
+      <label for="abertura_de">Abertura de</label>
+      <input id="abertura_de" name="abertura_de" type="date" value="{{ filtros.abertura_de.isoformat() if filtros.abertura_de else '' }}">
+    </div>
+    <div class="campo">
+      <label for="abertura_ate">Abertura até</label>
+      <input id="abertura_ate" name="abertura_ate" type="date" value="{{ filtros.abertura_ate.isoformat() if filtros.abertura_ate else '' }}">
+    </div>
+    <div class="campo">
+      <label for="simples">Simples Nacional</label>
+      <select id="simples" name="simples">
+        <option value="qualquer" {% if filtros.simples == 'qualquer' %}selected{% endif %}>Qualquer</option>
+        <option value="sim" {% if filtros.simples == 'sim' %}selected{% endif %}>Optante</option>
+        <option value="nao" {% if filtros.simples == 'nao' %}selected{% endif %}>Não optante</option>
+      </select>
+    </div>
+    <div class="campo">
+      <label for="mei">MEI</label>
+      <select id="mei" name="mei">
+        <option value="qualquer" {% if filtros.mei == 'qualquer' %}selected{% endif %}>Qualquer</option>
+        <option value="sim" {% if filtros.mei == 'sim' %}selected{% endif %}>Optante</option>
+        <option value="nao" {% if filtros.mei == 'nao' %}selected{% endif %}>Não optante</option>
+      </select>
+    </div>
+    <div class="acoes">
+      <button type="submit">Aplicar filtros</button>
+      <a href="{{ clear_url }}">Limpar filtros</a>
+    </div>
+  </form>
+</section>
+
+<section class="resultados" data-total="{{ total }}" data-page="{{ pagination.page }}" aria-live="polite">
+  <div class="resumo">
+    <strong>{{ total }} estabelecimento{% if total != 1 %}s{% endif %}</strong>
+    {% if pagination.total_pages %}
+    <span>Página {{ pagination.page }} de {{ pagination.total_pages }}</span>
+    {% endif %}
+  </div>
+
+  {% if rows %}
+  <div class="tabela-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>CNPJ</th>
+          <th>Empresa</th>
+          <th>Situação</th>
+          <th>UF / município</th>
+          <th>CNAE principal</th>
+          <th>Matriz/filial</th>
+          <th>Abertura</th>
+          <th>Simples/MEI</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td><a href="{{ row.detail_url }}">{{ row.cnpj_formatado }}</a></td>
+          <td>
+            <a href="{{ row.detail_url }}">{{ row.razao_social }}</a>
+            {% if row.nome_fantasia %}<small>{{ row.nome_fantasia }}</small>{% endif %}
+          </td>
+          <td>{{ row.situacao_descricao or row.situacao_codigo or '—' }}</td>
+          <td>{{ row.uf or '—' }} / {{ row.municipio_descricao or row.municipio_codigo or '—' }}</td>
+          <td>{{ row.cnae_principal_codigo or '—' }}{% if row.cnae_principal_descricao %} <small>{{ row.cnae_principal_descricao }}</small>{% endif %}</td>
+          <td>{{ row.matriz_filial or '—' }}</td>
+          <td>{{ row.data_inicio_atividade_formatada or '—' }}</td>
+          <td>Simples: {{ row.simples_label }} · MEI: {{ row.mei_label }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="vazio">
+    <p>Não há estabelecimentos correspondentes aos filtros informados.</p>
+    <p><a href="{{ clear_url }}">Limpar filtros</a> para ver todos os registros disponíveis.</p>
+  </div>
+  {% endif %}
+
+  {% if pagination.total_pages > 1 %}
+  <nav class="paginacao" aria-label="Paginação">
+    {% if pagination.has_previous %}<a href="{{ pagination.previous_url }}">Página anterior</a>{% endif %}
+    <span>Página {{ pagination.page }} de {{ pagination.total_pages }}</span>
+    {% if pagination.has_next %}<a href="{{ pagination.next_url }}">Próxima página</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+{% endblock %}

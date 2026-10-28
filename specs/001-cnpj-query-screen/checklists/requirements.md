@@ -1,7 +1,8 @@
-# Specification Quality Checklist: Tela de Consulta de Dados CNPJ
+# Specification Quality Checklist: Explorador Visual de Dados CNPJ
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-10-22
+**Updated**: 2026-10-27
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -31,18 +32,20 @@
 
 ## Notes
 
-- Itens marcados `[x]` apenas quando o critério de qualidade de requisitos for satisfeito.
-- Os 3 marcadores `[NEEDS CLARIFICATION]` foram resolvidos com o usuário e convertidos em
-  requisitos fechados:
-  - FR-018: acesso sem autenticação em rede interna, sem log de dado pessoal.
-  - FR-012 e FR-013: busca por razão social tolerante a erro de digitação, ordenada por
-    relevância e com sinalização do trecho que originou a correspondência.
-  - FR-019: exportação e painel de agregados explicitamente fora da v1.
-- Achados da validação (itens que passam):
-  - FR-001 a FR-019 são verificáveis por cenário de aceitação ou regra observável.
-  - SC-001 a SC-009 são mensuráveis e não citam tecnologia.
-  - Nenhum item de requisito referencia framework, linguagem, API ou produto específico;
-    a camada de armazenamento é citada apenas como premissa, sem nomear ferramenta.
-  - Escopo da v1 declarado no cabeçalho da spec, no FR-019 e nas premissas.
-- Dependência registrada: a feature consome o resultado do pipeline de ingestão existente;
-  a camada de consulta ainda não existe no repositório.
+- Validação executada em 2026-10-27 após a atualização do MVP.
+- Não há marcadores `[NEEDS CLARIFICATION]`; o escopo foi fechado com as decisões fornecidas.
+- As histórias P1 e P2 são testáveis de forma independente: a exploração entrega valor sem os
+  detalhes, e os detalhes podem ser validados a partir de um registro conhecido.
+- FR-001 a FR-036 e SC-001 a SC-011 são verificáveis por cenário de aceitação, estado observável
+  ou auditoria de conteúdo.
+- O escopo exclui explicitamente exportação/download, comparação histórica, dashboards,
+  ferramentas de BI, API pública para terceiros, busca aproximada, IA, cobrança, autenticação,
+  fontes externas e dados não presentes no inventário.
+- API para terceiros e BI (por exemplo, Superset) permanecem como evolução futura; a camada de
+  consulta é desacoplada da interface para permitir esses consumidores sem refazer a carga.
+- A spec não fixa linguagem, framework, banco, API ou detalhe de implementação; menciona apenas
+  comportamento observável e o inventário de dados disponível.
+- Dependência registrada: a feature consome somente o inventário já produzido pelo projeto,
+  na competência `2026-10`, sem alterar o pipeline de ingestão.
+- Os artefatos de planejamento (`plan.md`, `data-model.md`, `research.md`, `quickstart.md` e
+  `contracts/`) foram atualizados em 2026-10-27 para o escopo do explorador visual.

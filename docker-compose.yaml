@@ -3,3 +3,4 @@
 # when validating the opt-in S3/R2 path.
 include:
   - airflow/docker-compose.yaml
+  - query/docker-compose.yaml

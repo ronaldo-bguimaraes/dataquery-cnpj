@@ -1,9 +1,9 @@
-# Contrato da API de Consulta (v1)
+# Contrato HTTP — Páginas do Explorador
 
-**Feature**: `001-cnpj-query-screen` · **Data**: 2026-10-22
-**Implementação**: serviço Python (FastAPI) + DuckDB, exposto na rede interna.
-**Consumidores**: route handler do Next.js (`web/app/api/consulta/route.ts`) — **o browser
-nunca chama esta API diretamente**.
+**Feature**: `001-cnpj-query-screen` · **Data**: 2026-10-27
+**Tipo**: aplicação web server-rendered (FastAPI + Jinja2)
+**Consumidor**: navegador da pessoa interessada
+**API JSON pública**: não existe no MVP
 
 ---
 
@@ -11,278 +11,186 @@ nunca chama esta API diretamente**.
 
 | Item | Regra |
 |---|---|
-| Versão | prefixo de caminho `/v1` |
-| Formato | `application/json; charset=utf-8` |
-| Datas | `AAAA-MM-DD` (datas) e `AAAA-MM` (competência) |
-| Decimais | ponto como separador; `capital_social` com 2 casas |
-| Valores nulos | `null` (a chave permanece presente) |
-| Autenticação | **nenhuma** (FR-018) — o serviço só é alcançável pela rede interna |
-| Cache | respostas com dado de empresa usam `Cache-Control: private, no-store` (dado pessoal<br>mascarado); listas filtradas podem usar `private, max-age=60` |
-| Idempotência | todas as rotas são `GET` e somente leitura |
+| Métodos | somente `GET`; nenhuma rota escreve dados |
+| Formato | HTML UTF-8; `GET /health` responde JSON |
+| Filtros | na query string, um valor por filtro |
+| Estado | vive na URL; não há sessão, cookie de preferência ou login |
+| Competência | `2026-10`, exibida em todas as páginas de dados |
+| Fonte | `Receita Federal`, exibida junto da competência |
+| Aviso | toda página de dados informa que é um retrato mensal, não tempo real |
+| Cache | páginas de dados com `Cache-Control: no-store`; `health` também |
+| Exportação | nenhuma rota, botão ou link de download/CSV |
+| Privacidade | CPF nunca completo; termos de busca não entram em log |
+| Erros | HTML compreensível, sem stack trace, SQL ou detalhe interno |
 
-**Envelope de sucesso**
+### 1.1 Envelope visual comum
 
-```json
-{
-  "competencia": "2026-02",
-  "dados": { }
-}
-```
+Todas as páginas de dados exibem:
 
-**Envelope de erro**
+- título da página;
+- competência `2026-10`;
+- fonte `Receita Federal`;
+- aviso de retrato mensal;
+- link para a listagem (quando aplicável);
+- nenhum controle de exportação/download.
 
-```json
-{
-  "erro": {
-    "codigo": "CNPJ_INVALIDO",
-    "mensagem": "O CNPJ informado não é válido.",
-    "detalhes": { "campo": "cnpj" }
-  }
-}
-```
+---
 
-| Código | HTTP | Quando |
+## 2. `GET /` — entrada
+
+Redireciona (`303`) para `/estabelecimentos`. Não executa consulta.
+
+---
+
+## 3. `GET /estabelecimentos` — listagem e filtros
+
+Retorna a página de exploração com filtros, contagem total, listagem paginada e estados.
+
+### 3.1 Parâmetros
+
+| Nome | Tipo | Obrigatório | Regras | Efeito |
+|---|---|---|---|---|
+| `q` | texto | não | CNPJ completo (14 dígitos, com/sem máscara) ou nome com ≥ 3 caracteres | busca literal; não há fuzzy |
+| `situacao` | texto | não | código do catálogo (`01`,`02`,`03`,`04`,`05`,`08`) | situação cadastral |
+| `uf` | texto | não | 2 letras existentes no inventário | UF do estabelecimento |
+| `municipio` | texto | não | código presente em `municipios_por_uf` para a UF | município do estabelecimento |
+| `cnae` | texto | não | 7 dígitos presente em `cnaes_presentes` | CNAE principal ou secundário |
+| `porte` | texto | não | `00`,`01`,`03`,`05` | porte da empresa |
+| `matriz_filial` | texto | não | `1` ou `2` | matriz ou filial |
+| `abertura_de` | data | não | `AAAA-MM-DD` | início do intervalo de abertura (inclusivo) |
+| `abertura_ate` | data | não | `AAAA-MM-DD`, ≥ `abertura_de` | fim do intervalo de abertura (inclusivo) |
+| `simples` | texto | não | `sim`, `nao` ou `qualquer` | opção pelo Simples Nacional |
+| `mei` | texto | não | `sim`, `nao` ou `qualquer` | opção pelo MEI |
+| `pagina` | inteiro | não | ≥ 1; padrão `1` | página da listagem |
+
+- A página tem **25 registros** no MVP; não há parâmetro de tamanho de página.
+- Filtros diferentes são cumulativos (`E`). Não há seleção de múltiplos valores no mesmo
+  filtro.
+- `q` que parece CNPJ é validado como CNPJ; se inválido, a página retorna `400`.
+- Alterar qualquer filtro reinicia a navegação na página `1`.
+- A listagem é ordenada por CNPJ completo, de forma estável.
+
+### 3.2 Resposta 200 — com resultados
+
+A página MUST conter:
+
+- competência e fonte;
+- total exato de estabelecimentos correspondentes;
+- página atual e indicação de que há próxima/anterior;
+- uma linha por estabelecimento com:
+  - CNPJ completo;
+  - razão social da empresa;
+  - nome fantasia, quando houver;
+  - situação cadastral (rótulo e/ou código);
+  - UF e município;
+  - CNAE principal;
+  - matriz ou filial;
+  - data de abertura;
+  - indicador de opção pelo Simples/MEI;
+- link para `/estabelecimentos/{cnpj}`;
+- formulário de filtros preenchido com os valores atuais;
+- nenhum botão de exportação/download.
+
+### 3.3 Resposta 200 — sem resultados
+
+A página MUST conter:
+
+- contagem `0`;
+- mensagem clara de que não há correspondências;
+- ação para limpar os filtros;
+- filtros atuais preservados no formulário;
+- competência e fonte.
+
+O caso é de resultado vazio, **não** de erro HTTP.
+
+### 3.4 Respostas de erro
+
+| HTTP | Quando | Conteúdo |
 |---|---|---|
-| `CNPJ_INVALIDO` | 400 | CNPJ com formato ou dígitos verificadores inválidos |
-| `PARAMETRO_INVALIDO` | 400 | filtro, ordenação ou paginação fora do domínio aceito |
-| `COMPETENCIA_INDISPONIVEL` | 404 | competência pedida não existe no bucket |
-| `EMPRESA_NAO_ENCONTRADA` | 404 | CNPJ válido sem registro na competência |
-| `RESULTADO_VAZIO` | 200 | busca sem correspondência (não é erro) |
-| `LIMITE_EXCEDIDO` | 413 | paginação além do máximo permitido |
-| `ERRO_INTERNO` | 500 | falha inesperada (nenhum detalhe interno exposto) |
+| `400` | parâmetro inválido: CNPJ, UF, município, CNAE, situação, porte, matriz/filial, data, página ou busca curta | página de erro com campo e orientação; sem consulta |
+| `404` | rota inexistente | página 404 |
+| `503` | competência indisponível, banco inacessível ou carga não publicada | página de indisponibilidade, sem resultados parciais |
+| `500` | falha inesperada | mensagem genérica e opção de tentar novamente; sem detalhe interno |
 
 ---
 
-## 2. `GET /v1/empresas/{cnpj}` — ficha da empresa
+## 4. `GET /estabelecimentos/{cnpj}` — detalhe
 
-Retorna a ficha completa: cadastro, estabelecimentos, sócios e regime tributário.
+Retorna os detalhes cadastrais de um estabelecimento e os dados relacionados.
 
-**Parâmetros de caminho**
+### 4.1 Caminho
 
-| Nome | Tipo | Obrigatório | Regras |
-|---|---|---|---|
-| `cnpj` | texto | sim | 14 dígitos, aceitos com máscara, barras ou espaços; normalizado para só dígitos |
+| Nome | Regra |
+|---|---|
+| `cnpj` | CNPJ completo com 14 dígitos; aceita máscara (normalizada) |
 
-**Parâmetros de query**
+### 4.2 Resposta 200
 
-| Nome | Tipo | Padrão | Regras |
-|---|---|---|---|
-| `competencia` | `AAAA-MM` | competência mais recente disponível | deve existir no bucket |
+A página MUST conter:
 
-**Resposta 200** — `dados`:
+- competência e fonte;
+- CNPJ completo, matriz/filial, situação e data da situação;
+- nome fantasia, quando houver;
+- endereço: tipo de logradouro, logradouro, número, complemento, bairro, CEP, UF e
+  município;
+- data de abertura;
+- CNAE principal e CNAEs secundários;
+- contatos cadastrais quando disponíveis, identificados como dados da Receita Federal e
+  sujeitos a ausência/desatualização;
+- dados da empresa: razão social, natureza jurídica, porte, capital social, qualificação
+  do responsável, CNAE principal e ente federativo, quando aplicável;
+- situação de Simples Nacional e MEI, com datas de opção/exclusão ou indicação de ausência;
+- sócios quando disponíveis, com nome/razão social, qualificação, data de entrada, país e
+  documento sempre mascarado;
+- link de retorno para a listagem que reconstrói a URL com os filtros e a página de origem.
+
+### 4.3 Respostas de erro
+
+| HTTP | Quando |
+|---|---|
+| `400` | CNPJ com formato/dígitos verificadores inválidos |
+| `404` | CNPJ válido sem estabelecimento na competência |
+| `503` | competência/banco indisponível |
+| `500` | falha inesperada, sem detalhe interno |
+
+---
+
+## 5. `GET /health` — saúde operacional
+
+Responde JSON mínimo, sem dados de empresas, CPF, credenciais ou detalhes internos:
 
 ```json
 {
-  "competencia": "2026-02",
-  "dados": {
-    "empresa": {
-      "cnpj": "00038174000143",
-      "cnpj_basico": "00038174",
-      "razao_social": "BRASILIA DISTRIBUIDORA DE ALIMENTOS LTDA",
-      "natureza_juridica": { "codigo": "2062", "descricao": "Sociedade Empresária Limitada" },
-      "qualificacao_responsavel": { "codigo": "10", "descricao": "Diretor" },
-      "capital_social": 150000.00,
-      "porte": "05",
-      "ente_federativo": null,
-      "uf": "DF",
-      "cnae_principal": { "codigo": "4631701", "descricao": "Comércio atacadista de produtos alimentícios" }
-    },
-    "estabelecimentos": [
-      {
-        "cnpj": "00038174000143",
-        "identificador_matriz_filial": "1",
-        "nome_fantasia": "BRASILIA ALIMENTOS",
-        "situacao_cadastral": { "codigo": "02", "descricao": "Ativa" },
-        "data_situacao_cadastral": "2005-11-03",
-        "data_inicio_atividade": "2005-11-03",
-        "cnae_principal": { "codigo": "4631701", "descricao": "Comércio atacadista de produtos alimentícios" },
-        "cnaes_secundarios": ["4711104"],
-        "endereco": {
-          "logradouro": "SETOR DE INDUSTRIA", "numero": "S/N", "complemento": "GALPAO 12",
-          "bairro": "SAIA", "cep": "71800000", "uf": "DF",
-          "municipio": { "codigo": "9701", "descricao": "BRASILIA" }
-        }
-      }
-    ],
-    "socios": [
-      {
-        "identificador_socio": "2",
-        "nome_socio": "MARIA EXEMPLO",
-        "cpf_socio": "***456789**",
-        "qualificacao_socio": { "codigo": "22", "descricao": "Sócio-Administrador" },
-        "data_entrada_sociedade": "2005-11-03",
-        "pais": { "codigo": "1058", "descricao": "BRASIL" },
-        "representante_legal": "0",
-        "nome_representante": null,
-        "qualificacao_representante_legal": null,
-        "faixa_etaria": "05"
-      }
-    ],
-    "regime_tributario": {
-      "opcao_simples": "2006-01-01",
-      "data_opcao_simples": "2006-01-01",
-      "data_exclusao_simples": null,
-      "opcao_mei": null,
-      "data_opcao_mei": null,
-      "data_exclusao_mei": null
-    }
-  }
+  "status": "ok",
+  "competencia": "2026-10",
+  "fonte": "Receita Federal",
+  "banco": "ok"
 }
 ```
 
-**Regras da resposta**
-
-- `socios[].cpf_socio` é **sempre** mascarado (`***456789**`) — a máscara é aplicada na fronteira
-  do serviço; o valor em claro não existe na resposta nem em log (FR-017, FR-018).
-- Seções sem registro vêm como lista vazia ou `null` — nunca como erro (FR-015).
-- `empresa.uf` é a UF **derivada do CNPJ**; `estabelecimentos[].endereco.uf` é a UF do endereço.
-- `404` com `EMPRESA_NAO_ENCONTRADA` quando o CNPJ é válido mas não consta na competência.
+- `200` quando o banco responde e há competência ativa.
+- `503` quando o banco ou a competência não estão disponíveis.
+- Não é uma API de consulta e não retorna registros.
 
 ---
 
-## 3. `GET /v1/empresas` — listagem por filtros
+## 6. Regras de Privacidade e Segurança
 
-**Parâmetros de query**
-
-| Nome | Tipo | Obrigatório | Regras |
-|---|---|---|---|
-| `uf` | texto | não | sigla válida (27) |
-| `municipio` | texto | não | código de município existente |
-| `cnae` | texto | não | código de 7 dígitos **ou prefixo** (hierárquico, FR-009); casa CNAE principal e secundário |
-| `porte` | texto | não | valor do conjunto fechado; repetir o parâmetro para OR |
-| `razao_social` | texto | não | **correspondência exata/prefixo normalizado** (sem fuzzy) — para fuzzy use a rota 4 |
-| `ordenar_por` | enum | não | `razao_social` \| `municipio` \| `porte` \| `cnpj` (padrão `cnpj`) |
-| `direcao` | enum | não | `asc` \| `desc` (padrão `asc`) |
-| `pagina` | inteiro | não | ≥ 1 (padrão 1) |
-| `tamanho_pagina` | inteiro | não | 1–100 (padrão 20) |
-| `competencia` | `AAAA-MM` | não | padrão: mais recente disponível |
-
-**Resposta 200**
-
-```json
-{
-  "competencia": "2026-02",
-  "dados": {
-    "itens": [
-      {
-        "cnpj": "00038174000143",
-        "razao_social": "BRASILIA DISTRIBUIDORA DE ALIMENTOS LTDA",
-        "uf": "DF",
-        "municipio": { "codigo": "9701", "descricao": "BRASILIA" },
-        "porte": "05",
-        "cnae_principal": { "codigo": "4631701", "descricao": "Comércio atacadista de produtos alimentícios" }
-      }
-    ],
-    "paginacao": { "pagina": 1, "tamanho_pagina": 20, "total": 137, "total_paginas": 7 },
-    "filtros_aplicados": { "uf": "DF", "cnae": "4631701" }
-  }
-}
-```
-
-**Regras**
-
-- Todos os filtros são combinados com **AND**; valores repetidos do mesmo filtro usam OR.
-- `filtros_aplicados` devolve os filtros normalizados efetivamente usados — a listagem precisa
-  preservar os filtros entre as páginas (FR-010).
-- `total` é o total de correspondências, não o da página.
+- CPF de sócio é sempre mascarado; nunca aparece com 11 dígitos.
+- A apresentação também aplica redação defensiva a padrões de CPF em texto livre.
+- Termos de busca, CPF e conteúdo de fichas não entram em log de aplicação.
+- Toda saída HTML é escapada; entradas não são interpoladas em SQL.
+- A aplicação usa um papel PostgreSQL somente leitura.
+- Não há autenticação no MVP; a exposição deve permanecer local/interna até uma decisão
+  de deployment com controle de acesso.
+- Não há endpoints de exportação, download, edição ou upload.
 
 ---
 
-## 4. `GET /v1/busca/razao-social` — busca tolerante a erro de digitação
+## 7. Compatibilidade e Evolução
 
-**Parâmetros de query**
-
-| Nome | Tipo | Obrigatório | Regras |
-|---|---|---|---|
-| `termo` | texto | sim | ≥ 3 caracteres (abaixo disso o corte de trigramas não se aplica) |
-| `uf` | texto | não | restringe os candidatos antes do ranqueamento |
-| `municipio` | texto | não | idem |
-| `cnae` | texto | não | idem |
-| `porte` | texto | não | idem |
-| `limite` | inteiro | não | 1–100 (padrão 20) |
-| `limiar_similaridade` | decimal | não | 0–1 (padrão 0,25) |
-| `competencia` | `AAAA-MM` | não | padrão: mais recente disponível |
-
-**Resposta 200**
-
-```json
-{
-  "competencia": "2026-02",
-  "dados": {
-    "itens": [
-      {
-        "cnpj": "00038174000143",
-        "razao_social": "BRASILIA DISTRIBUIDORA DE ALIMENTOS LTDA",
-        "trecho_destacado": "BRASILIA",
-        "similaridade": 0.62,
-        "uf": "DF",
-        "municipio": { "codigo": "9701", "descricao": "BRASILIA" },
-        "porte": "05",
-        "cnae_principal": { "codigo": "4631701", "descricao": "Comércio atacadista de produtos alimentícios" }
-      }
-    ],
-    "total_candidatos": 412,
-    "termo": "BRASLIA"
-  }
-}
-```
-
-**Regras**
-
-- `similaridade` é a similaridade de dice sobre trigramas, na faixa 0–1.
-- `trecho_destacado` é o trecho da razão social que originou a correspondência (FR-013).
-- A ordenação é por `similaridade` decrescente, com desempate por porte e depois por CNPJ.
-- `total_candidatos` é o total antes do corte de `limite` — o usuário precisa saber que houve
-  mais candidatos do que os exibidos.
-
----
-
-## 5. `GET /v1/competencias` — competências disponíveis
-
-```json
-{
-  "dados": {
-    "competencias": ["2026-02", "2026-01", "2025-12"],
-    "atual": "2026-02"
-  }
-}
-```
-
----
-
-## 6. `GET /v1/lookups/{recurso}` — valores dos filtros
-
-Recursos: `uf` · `municipio` (com `uf` como query opcional) · `cnae` · `porte`.
-
-```json
-{
-  "competencia": "2026-02",
-  "dados": {
-    "itens": [ { "codigo": "SP", "descricao": "São Paulo" } ]
-  }
-}
-```
-
----
-
-## 7. `GET /v1/saude` — prontidão
-
-```json
-{ "dados": { "status": "ok", "competencia": "2026-02" } }
-```
-
-Retorna 503 quando a competência configurada não está acessível — usado pelo Worker para
-exibir "dados indisponíveis" em vez de erro genérico.
-
----
-
-## 8. Regras transversais
-
-1. **Erros de origem nunca vazam**: o Worker e a API exibem `mensagem` ao usuário, e o detalhe
-   técnico fica apenas no log da aplicação (sem dado pessoal).
-2. **Idempotência e leitura pura**: nenhuma rota altera estado; não há `POST`/`PUT`/`DELETE` na
-   v1.
-3. **Desempenho alvo**: `GET /v1/empresas/{cnpj}` ≤ 3 s (p95) e `GET /v1/empresas` ≤ 5 s (p95)
-   (SC-002, SC-003).
-4. **Compatibilidade**: enquanto a v1 estiver publicada, novos campos podem ser adicionados às
-   respostas; campos existentes não mudam de tipo nem de significado. Remoções exigem v2.
+- A URL é o contrato de estado: filtros e página podem ser compartilhados e reabertos.
+- Novos filtros podem ser adicionados como parâmetros opcionais, sem quebrar os existentes.
+- Remoção/renomeação de parâmetro ou mudança de significado exige nova versão do contrato.
+- Uma futura API JSON, exportação CSV, histórico ou autenticação serão features separadas;
+  não fazem parte deste contrato.

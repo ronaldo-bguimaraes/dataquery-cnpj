@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import importlib.util
 import socket
 from dataclasses import dataclass
 
 import pytest
 from aiohttp import web
+
+# The portal suite has its own image/dependencies (FastAPI, psycopg, PostgreSQL).
+# Keep the Airflow/pipeline image from collecting it when those are absent.
+collect_ignore = []
+if importlib.util.find_spec("fastapi") is None or importlib.util.find_spec("psycopg") is None:
+    collect_ignore.append("query")
 
 
 @dataclass

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Estabelecimento não encontrado · CNPJ{% endblock %}
+{% block content %}
+<section class="mensagem-erro">
+  <h1>Estabelecimento não encontrado</h1>
+  <p>Não há estabelecimento com o CNPJ {{ cnpj }} na competência {{ competencia }}.</p>
+  <p><a href="{{ back_url }}">Voltar para a lista</a></p>
+</section>
+{% endblock %}

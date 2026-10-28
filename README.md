@@ -47,6 +47,11 @@ Existe apenas um `.env`, na raiz do repositório; não crie `airflow/.env`.
 
 # Pipeline CNPJ Raw → Bronze
 
+## Dados cobertos e melhorias futuras
+
+O inventário do que os Parquets atuais permitem consultar e das evoluções planejadas
+está em [docs/roadmap-dados.md](docs/roadmap-dados.md).
+
 A DAG manual `cnpj_download_manual` processa uma competência (`AAAA-MM`) da Receita
 Federal. Para cada ZIP selecionado, ela executa um par independente:
 
@@ -207,3 +212,25 @@ em raiz temporária (`tests/integration/test_filesystem_pipeline.py`).
 - `data/` é **gitignored** (`/data/*`, exceto `.gitkeep`) e pode conter dados brutos
   da RFB, incluindo CPF de sócios. Não publique, versione nem envie esse diretório
   para storage público.
+
+# Portal de consulta (explorador visual)
+
+O portal consome os Parquets Bronze da competência `2026-10` e publica um explorador web
+somente leitura com filtros, contagem, paginação e detalhe de estabelecimento/empresa.
+
+```shell
+docker compose --profile query up -d query-db
+docker compose --profile query run --rm query-loader
+docker compose --profile query up -d query-web
+```
+
+- Interface: <http://localhost:8000>
+- Operação e variáveis: [query/README.md](query/README.md)
+- Arquitetura: PostgreSQL 16 + FastAPI/Jinja2; loader separado; read model
+  `estabelecimentos_listagem`
+- Segurança: CPF mascarado na carga, papel PostgreSQL somente leitura na web, sem
+  exportação/download/autenticação no MVP
+- Testes do portal: `docker compose --profile query-test run --rm query-tests pytest tests/query -q -m "not e2e"`
+
+API para terceiros e BI (por exemplo, Superset) são evoluções futuras: podem reutilizar o
+PostgreSQL/read model, mas terão contratos, autenticação e operação próprios.

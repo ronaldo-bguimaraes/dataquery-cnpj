@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · CNPJ{% endblock %}
+{% block content %}
+<section class="mensagem-erro" data-status="{{ status_code }}">
+  <h1>{{ title }}</h1>
+  <p>{{ message }}</p>
+  {% if field %}<p><small>Campo: {{ field }}</small></p>{% endif %}
+  <p><a href="/estabelecimentos">Voltar para a exploração</a></p>
+</section>
+{% endblock %}
