@@ -33,6 +33,25 @@ def test_converts_single_csv_to_bronze_parquet(tmp_path):
     assert result.nome == "Cnaes.zip"
     assert result.raw_key == RAW_KEY
     assert result.bronze_key == BRONZE_KEY
+
+
+def test_converts_single_member_with_real_rfb_name_without_csv_suffix(tmp_path):
+    member = "F.K03200$Z.D61010.CNAECSV"
+    store = FakeObjectStore({RAW_KEY: make_zip({member: CSV})})
+
+    result = convert_raw_file(
+        "2026-02",
+        "Cnaes.zip",
+        RAW_KEY,
+        store=store,
+        scratch_dir=tmp_path,
+    )
+
+    assert result.status == "publicado"
+    assert result.erro is None
+    assert result.bronze_key == BRONZE_KEY
+    assert result.linhas == 2
+    assert read_parquet(store.objects[BRONZE_KEY]).num_rows == 2
     assert result.linhas == 2
     assert result.bytes_parquet > 0
     assert result.erro is None

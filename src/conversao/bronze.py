@@ -104,7 +104,13 @@ def _sanitize_conversion_error(exc: BaseException) -> str:
 
 
 def _single_csv_member(archive: zipfile.ZipFile):
-    """Return the only CSV member of ``archive`` or raise ``ConversionError``."""
+    """Return the only file member of ``archive`` or raise ``ConversionError``.
+
+    RFB ZIPs name their CSV member without a ``.csv`` suffix, for example
+    ``F.K03200$Z.D61010.CNAECSV`` or ``K3241.K03200Y0.D61010.EMPRECSV``. The
+    member name therefore cannot be used to decide whether the payload is CSV;
+    the single-member invariant plus the CSV parser are the effective checks.
+    """
 
     members = [info for info in archive.infolist() if not info.is_dir()]
     if len(members) != 1:
@@ -112,13 +118,7 @@ def _single_csv_member(archive: zipfile.ZipFile):
             "ZIP deve conter exatamente um CSV; "
             f"encontrados {len(members)}"
         )
-    member = members[0]
-    if not member.filename.lower().endswith(".csv"):
-        raise ConversionError(
-            "ZIP deve conter exatamente um CSV; "
-            f"encontrado {member.filename}"
-        )
-    return member
+    return members[0]
 
 
 def convert_raw_file(
