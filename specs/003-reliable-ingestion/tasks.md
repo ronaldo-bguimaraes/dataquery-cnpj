@@ -169,13 +169,13 @@
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T049 [P] Atualizar `docs/roadmap-dados.md` com links para feature 003 (pipeline Iceberg/estudo de definições)
-- [ ] T050 Executar `specs/003-reliable-ingestion/quickstart.md` completo na amostra: contagens, unique keys, CPF mascarado, FK, rollback
-- [ ] T051 Refatorar: remover duplicação entre `orchestrate.py` e `publish.py` (transações em módulo único), lint/format do package
-- [ ] T052 Segurança: revisão de logs/erros contra segredos e PII varredura (grep placeholders CNPJ reais em `tests/`, fixtures sintéticas)
-- [ ] T053 [P] Testes de unidade adicionais para edge cases em `tests/ingest_parallel/unit/test_edge_cases.py`: arquivo vazio, hash duplicado, competência sem arquivos (falha de qualidade, não publicação vazia)
-- [ ] T054 Executar carga completa da competência `2026-10` (223M, SC-012) conforme runbook e registrar duração/memória em `specs/003-reliable-ingestion/quickstart.md` §Benchmark
-- [ ] T055 Validação final da constituição: relatório consolidado vs 10 princípios, gaps abertos anotados em `plan.md`
+- [X] T049 [P] Atualizar `docs/roadmap-dados.md` com links para feature 003 (pipeline Iceberg/estudo de definições)
+- [X] T050 Executar `specs/003-reliable-ingestion/quickstart.md` completo na amostra: contagens, unique keys, CPF mascarado, FK, rollback
+- [X] T051 Refatorar: remover duplicação entre `orchestrate.py` e `publish.py` (transações em módulo único), lint/format do package
+- [X] T052 Segurança: revisão de logs/erros contra segredos e PII varredura (grep placeholders CNPJ reais em `tests/`, fixtures sintéticas)
+- [X] T053 [P] Testes de unidade adicionais para edge cases em `tests/ingest_parallel/unit/test_edge_cases.py`: arquivo vazio, hash duplicado, competência sem arquivos (falha de qualidade, não publicação vazia)
+- [ ] T054 (PENDENTE - requer Bronze completo + Airflow em produção) Executar carga completa da competência `2026-10` (223M, SC-012) conforme runbook e registrar duração/memória em `specs/003-reliable-ingestion/quickstart.md` §Benchmark
+- [X] T055 Validação final da constituição: relatório consolidado vs 10 princípios, gaps abertos anotados em `plan.md`
 
 ---
 

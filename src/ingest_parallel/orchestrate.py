@@ -27,10 +27,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.resume:
         parser.error("--resume é obrigatório")
-    dsn = os.environ.get(
-        "CNPJ_INGEST_SERVING_DSN",
-        "postgresql://cnpj_query_loader:change-me@127.0.0.1:55432/cnpj_query_test",
-    )
+    dsn = os.environ.get("CNPJ_INGEST_SERVING_DSN", "")
+    if not dsn:
+        parser.error("CNPJ_INGEST_SERVING_DSN não definido")
     resumed: list[str] = []
     with psycopg.connect(dsn) as connection:
         ensure_run_tables(connection)
