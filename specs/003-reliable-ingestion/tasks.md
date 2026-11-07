@@ -151,17 +151,17 @@
 
 ### Testes (escrever primeiro, ver falhar)
 
-- [ ] T041 [P] [US4] Teste de integração de rastreabilidade em `tests/ingest_parallel/integration/test_lineage.py`: após publicação, metadados da versão contêm `competencia`, `data_version_id`, hashes por arquivo, `silver_snapshot_id`, `code_version`, contagens (US4 aceite 1; FR-042)
-- [ ] T042 [P] [US4] Teste de integração de versionamento/rollback em `tests/ingest_parallel/integration/test_version_rollback.py`: 2 versões da mesma competência coexistem (snapshot anterior legível); rollback de teste restaura versão anterior no serving (FR-045/047, SC-011)
+- [X] T041 [P] [US4] Teste de integração de rastreabilidade em `tests/ingest_parallel/integration/test_lineage.py`: após publicação, metadados da versão contêm `competencia`, `data_version_id`, hashes por arquivo, `silver_snapshot_id`, `code_version`, contagens (US4 aceite 1; FR-042)
+- [X] T042 [P] [US4] Teste de integração de versionamento/rollback em `tests/ingest_parallel/integration/test_version_rollback.py`: 2 versões da mesma competência coexistem (snapshot anterior legível); rollback de teste restaura versão anterior no serving (FR-045/047, SC-011)
 
 ### Implementação
 
-- [ ] T043 [US4] Implementar classificação incremental em `src/ingest_parallel/lakehouse.py` (módulo `changes.py` novo): compara hash por arquivo/partição com competência anterior → classifica `novos/modificados/inalterados/removidos`, grava em `load_partition` e registra decisão de carga completa explícita quando não aplicável (FR-027/028/029) (depende T012, T030)
-- [ ] T044 [US4] Implementar aplicação incremental: apenas partições classificadas como novas/modificados são reescritas; inalteradas puladas com registro "sem alteração"; remoções tratadas conforme contrato (delete por partição na branch, auditado) (FR-030/031/032, US4 aceite 3–4) (depende T043)
-- [ ] T045 [US4] Implementar validação de evolução de schema em `src/ingest_parallel/quality.py`: diff de schema Bronze vs contrato; incompatível → falha antes da publicação (`SCHEMA_INCOMPATIBLE`); compatível → evolução registrada e versão anterior legível (FR-006, SC-010, US4 aceite 6)
-- [ ] T046 [US4] Implementar manutenção e retenção em `src/ingest_parallel/lakehouse.py` (módulo `maintenance.py`): compaction (PyIceberg `table.maintenance.compact()` ou fallback Spark 4 documentado), `expire_snapshots` e limpeza de orphans observáveis, respeitando retenção da versão ativa (FR-036, FR-048, research D10)
-- [ ] T047 [US4] Expor histórico em `src/ingest_parallel/observability.py`: endpoint-friendly queries/documentadas (`runs`, `partitions`, `rejects`, `publications`) no runbook `airflow/dags/runbook.md`, sem PII (FR-041/043, US4 aceite 7) (depende T010, T011)
-- [ ] T048 [US4] Documentar exceções arquiteturais (se houver) com justificativa/responsável/prazo em `specs/003-reliable-ingestion/plan.md` §Complexity Tracking + decisão de retention policy em `docs/roadmap-dados.md` (FR-049) (depende T046)
+- [X] T043 [US4] Implementar classificação incremental em `src/ingest_parallel/lakehouse.py` (módulo `changes.py` novo): compara hash por arquivo/partição com competência anterior → classifica `novos/modificados/inalterados/removidos`, grava em `load_partition` e registra decisão de carga completa explícita quando não aplicável (FR-027/028/029) (depende T012, T030)
+- [X] T044 [US4] Implementar aplicação incremental: apenas partições classificadas como novas/modificados são reescritas; inalteradas puladas com registro "sem alteração"; remoções tratadas conforme contrato (delete por partição na branch, auditado) (FR-030/031/032, US4 aceite 3–4) (depende T043)
+- [X] T045 [US4] Implementar validação de evolução de schema em `src/ingest_parallel/quality.py`: diff de schema Bronze vs contrato; incompatível → falha antes da publicação (`SCHEMA_INCOMPATIBLE`); compatível → evolução registrada e versão anterior legível (FR-006, SC-010, US4 aceite 6)
+- [X] T046 [US4] Implementar manutenção e retenção em `src/ingest_parallel/lakehouse.py` (módulo `maintenance.py`): compaction (PyIceberg `table.maintenance.compact()` ou fallback Spark 4 documentado), `expire_snapshots` e limpeza de orphans observáveis, respeitando retenção da versão ativa (FR-036, FR-048, research D10)
+- [X] T047 [US4] Expor histórico em `src/ingest_parallel/observability.py`: endpoint-friendly queries/documentadas (`runs`, `partitions`, `rejects`, `publications`) no runbook `airflow/dags/runbook.md`, sem PII (FR-041/043, US4 aceite 7) (depende T010, T011)
+- [X] T048 [US4] Documentar exceções arquiteturais (se houver) com justificativa/responsável/prazo em `specs/003-reliable-ingestion/plan.md` §Complexity Tracking + decisão de retention policy em `docs/roadmap-dados.md` (FR-049) (depende T046)
 
 **Checkpoint**: Rastreabilidade, rollback e incremental completos — feature integralmente entregável
 

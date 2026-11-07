@@ -75,6 +75,25 @@ def _q(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+def _rename_constraint(connection: psycopg.Connection, table: str, *, from_name: str, to_name: str) -> None:
+    """Renomeia constraint se existir (nomes globais sobrevivem a RENAME TABLE)."""
+
+    connection.execute(
+        f"""
+        DO $$
+        BEGIN
+        IF EXISTS (
+            SELECT 1 FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            WHERE c.conname = '{from_name}' AND t.relname = '{table}'
+        ) THEN
+            ALTER TABLE {_q(table)} RENAME CONSTRAINT {_q(from_name)} TO {_q(to_name)};
+        END IF;
+        END $$;
+        """
+    )
+
+
 def ensure_run_tables(connection: psycopg.Connection) -> None:
     """Cria as tabelas de estado da execução (idempotente)."""
 
@@ -133,15 +152,22 @@ def _swap(connection: psycopg.Connection, counts: DatasetCounts, competencia: st
 
     with connection.transaction():
         connection.execute("SET LOCAL lock_timeout = '2s'")
+        previous_publication = _previous_publication_id(connection, counts.load_id)
         for table in SERVING_TABLES:
             staging = staging_table_name(table, counts.load_id)
             pk_col = "cnpj_completo" if table == "estabelecimentos" else "cnpj_basico"
-            pk_name = staging + "_pk"
-            # A base antiga leva o nome da constraint (RENAME não renomeia constraint:
-            # droppar a base antes de criar o novo PK evita colisão de nomes globais).
-            connection.execute(f"DROP TABLE IF EXISTS {_q(table)} CASCADE")
+            # Retenção da versão anterior para rollback (FR-047): a base atual é ARCHIVED
+            # sob o nome do load que ela CONTÉM (a publicação anterior não sobrescrita).
+            archive_name = f"archived_{table}_{previous_publication or counts.load_id}"
+            archive = _q(archive_name)
+            connection.execute(f"DROP TABLE IF EXISTS {archive} CASCADE")
+            connection.execute(f"ALTER TABLE {_q(table)} RENAME TO {archive}")
+            # Renomeia a constraint junto com o archive (nomes são globais no Postgres)
+            _rename_constraint(
+                connection, archive_name, from_name=f"pk_{table}", to_name=f"{archive_name}_pk"
+            )
             connection.execute(
-                f"ALTER TABLE {_q(staging)} ADD CONSTRAINT {_q(pk_name)} PRIMARY KEY ({_q(pk_col)})"
+                f"ALTER TABLE {_q(staging)} ADD CONSTRAINT {_q('pk_' + table)} PRIMARY KEY ({_q(pk_col)})"
             )
             connection.execute(f"ALTER TABLE {_q(staging)} RENAME TO {_q(table)}")
 
@@ -170,10 +196,41 @@ def _swap(connection: psycopg.Connection, counts: DatasetCounts, competencia: st
             )
             VALUES (%s, %s, %s, %s, 'published', now())
             ON CONFLICT (publication_id) DO UPDATE SET
-                status = 'published', published_at = EXCLUDED.published_at
+                status = 'published', published_at = EXCLUDED.published_at,
+                previous_active = EXCLUDED.previous_active
             """,
-            (counts.load_id, competencia, counts.load_id, _previous_active(connection, competencia)),
+            (counts.load_id, competencia, counts.load_id, _previous_publication_id(connection, counts.load_id)),
         )
+
+
+def _previous_publication_id(connection: psycopg.Connection, current_load_id: str) -> str | None:
+    """Versão anterior publicada (para rollback, FR-047), por data de publicação."""
+
+    row = connection.execute(
+        "SELECT load_id FROM serving_publication"
+        " WHERE publication_id <> %s AND status = 'published'"
+        " ORDER BY published_at DESC LIMIT 1",
+        (current_load_id,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _prune_old_archives(connection: psycopg.Connection, table: str, keep_load_id: str) -> None:
+    """Mantém apenas a geração anterior arquivada (política de retenção, FR-045).
+
+    CUIDADO: não remover/archive do load em processo nem a geração anterior
+    (o archive recém-reescrito carrega o nome da publicação anterior). Retenção
+    completa (idade e expiração) fica na US4/T046.
+    """
+
+    prefix = f"archived_{table}_%"
+    rows = connection.execute(
+        "SELECT tablename FROM pg_tables"
+        " WHERE schemaname = 'public' AND tablename LIKE %s AND tablename <> %s",
+        (prefix, f"archived_{table}_{keep_load_id}"),
+    ).fetchall()
+    for (old_archive,) in rows:
+        connection.execute(f"DROP TABLE IF EXISTS {_q(old_archive)} CASCADE")
 
 
 def _previous_active(connection: psycopg.Connection, competencia: str) -> str | None:
@@ -183,6 +240,60 @@ def _previous_active(connection: psycopg.Connection, competencia: str) -> str | 
     if row and row[0] != competencia:
         return row[0]
     return None
+
+
+def rollback_serving(dsn: str, publication_id: str) -> dict[str, Any]:
+    """Restaura a versão arquivada da publicação anterior (FR-045, SC-011).
+
+    Passos: previous_active → para cada tabela, base atual vira archive da versão
+    cancelada; archive da versão anterior retorna para a base; status anterior vira
+    `published` e o atual `rolled_back` — tudo em uma transação (contrato §5).
+    """
+
+    try:
+        with psycopg.connect(dsn) as connection:
+            ensure_run_tables(connection)
+            pub = connection.execute(
+                "SELECT previous_active, status FROM serving_publication WHERE publication_id = %s",
+                (publication_id,),
+            ).fetchone()
+            if not pub:
+                raise ServingAbort(f"publicação inexistente: {publication_id}")
+            previous_active, atual_status = pub
+            if previous_active is None:
+                raise ServingAbort("não há versão anterior registrada para rollback")
+
+            with connection.transaction():
+                connection.execute("SET LOCAL lock_timeout = '2s'")
+                for table in SERVING_TABLES:
+                    base = _q(table)
+                    archive_cancelada_name = f"archived_{table}_{publication_id}"
+                    archive_cancelada = _q(archive_cancelada_name)
+                    archive_anterior = _q(f"archived_{table}_{previous_active}")
+                    archive_anterior_name = f"archived_{table}_{previous_active}"
+                    connection.execute(f"DROP TABLE IF EXISTS {archive_cancelada} CASCADE")
+                    # lugar para a base atual sem colidir
+                    connection.execute(
+                        f"ALTER TABLE IF EXISTS {base} RENAME TO {archive_cancelada}"
+                    )
+                    _rename_constraint(connection, archive_cancelada_name, from_name=f"pk_{table}", to_name=f"{archive_cancelada_name}_pk")
+                    connection.execute(f"ALTER TABLE IF EXISTS {archive_anterior} RENAME TO {base}")
+                    _rename_constraint(connection, table, from_name=f"{archive_anterior_name}_pk", to_name=f"pk_{table}")
+
+                connection.execute(
+                    "UPDATE serving_publication SET status = 'published', published_at = now()"
+                    " WHERE publication_id = %s",
+                    (previous_active,),
+                )
+                connection.execute(
+                    "UPDATE serving_publication SET status = 'rolled_back' WHERE publication_id = %s",
+                    (publication_id,),
+                )
+        return {"rolled_back": True, "publication_id": publication_id, "restored": previous_active}
+    except ServingAbort:
+        raise
+    except psycopg.Error as exc:
+        raise ServingAbort(f"rollback falhou: {type(exc).__name__}") from exc
 
 
 def publish_serving(  # noqa: PLR0915

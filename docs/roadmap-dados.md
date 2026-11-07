@@ -90,6 +90,23 @@ Não apresentar esses módulos como disponíveis até que as fontes tenham sido 
 validadas e integradas. Dados de fontes distintas devem manter sua própria origem,
 competência e regras de atualização.
 
+## Ingestão de próxima geração
+
+A feature 003 estabelece a ingestão paralela e confiável para a competência completa
+(≈223 milhões de registros): loading em 8 workers com partições lógicas (64–128),
+transação atômica na camada Iceberg Silver, staging UNLOGGED + swap atômico no
+serving, idempotência por `load_id`, ledger de rejeições e rollback. Detalhes:
+
+- [Spec](../specs/003-reliable-ingestion/spec.md)
+- [Plan](../specs/003-reliable-ingestion/plan.md)
+- [Data model](../specs/003-reliable-ingestion/data-model.md)
+- [Quickstart](../specs/003-reliable-ingestion/quickstart.md)
+- [Runbook de operação](../airflow/dags/runbook.md)
+
+Cobertura da Constitution v2.0.0: ACID, idempotência, deduplicação, incremental,
+tolerância a falha, batch atômico, execução distribuída, consumo limitado,
+observabilidade e versionamento/reprodutibilidade (10/10 do check).
+
 ## Direção de produto
 
 A hipótese atual é oferecer um explorador visual dos dados públicos: a pessoa escolhe

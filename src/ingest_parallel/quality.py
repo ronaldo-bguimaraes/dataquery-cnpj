@@ -74,6 +74,40 @@ def _check_schema(dataset: DatasetCounts, obrigatorio: dict[str, list[str]]) -> 
     return missing
 
 
+class SchemaEvolutionError(ValueError):
+    """Evolução de schema incompatível deve falhar antes da publicação (FR-006, SC-010)."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(f"{code}: {detail}")
+        self.code = code
+
+
+def validate_schema_evolution(
+    colunas_anteriores: list[str],
+    colunas_novas: list[str],
+    *,
+    tipos_anteriores: dict[str, str] | None = None,
+    tipos_novas: dict[str, str] | None = None,
+) -> None:
+    """Campo novo é compatível; campo removido ou tipo alterado não é (FR-006)."""
+
+    removidos = [coluna for coluna in colunas_anteriores if coluna not in colunas_novas and not coluna.endswith(":")]
+    if removidos:
+        raise SchemaEvolutionError(
+            "SCHEMA_INCOMPATIBLE", f"colunas removidas: {sorted(removidos)}"
+        )
+    if tipos_anteriores is not None and tipos_novas is not None:
+        changed = {
+            column
+            for column in set(tipos_anteriores) & set(tipos_novas)
+            if tipos_anteriores[column] != tipos_novas[column]
+        }
+        if changed:
+            raise SchemaEvolutionError(
+                "SCHEMA_INCOMPATIBLE", f"tipos alterados: {sorted(changed)}"
+            )
+
+
 def run_quality_checks(
     dataset: DatasetCounts,
     *,

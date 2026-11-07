@@ -15,7 +15,8 @@ def clean_test_schema_fixture(ingest_test_dsn):
         for table in ("ingestion_run", "load_partition", "serving_publication"):
             conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         nomes = conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'staging_%'"
+            "SELECT tablename FROM pg_tables WHERE schemaname='public'"
+            " AND (tablename LIKE 'staging_%' OR tablename LIKE 'archived_%')"
         ).fetchall()
         for (name,) in nomes:
             conn.execute(f'DROP TABLE IF EXISTS "{name}" CASCADE')
