@@ -1,7 +1,8 @@
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE TABLE IF NOT EXISTS query_metadata (
-    competencia text PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    competencia text NOT NULL UNIQUE,
     fonte text NOT NULL,
     carregado_em timestamptz NOT NULL DEFAULT now(),
     total_empresas bigint NOT NULL,
@@ -11,7 +12,8 @@ CREATE TABLE IF NOT EXISTS query_metadata (
 );
 
 CREATE TABLE IF NOT EXISTS empresas (
-    cnpj_basico char(8) PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    cnpj_basico char(8) NOT NULL UNIQUE,
     razao_social text NOT NULL,
     razao_social_normalizada text NOT NULL,
     natureza_juridica_codigo text,
@@ -22,7 +24,8 @@ CREATE TABLE IF NOT EXISTS empresas (
 );
 
 CREATE TABLE IF NOT EXISTS estabelecimentos (
-    cnpj_completo char(14) PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    cnpj_completo char(14) NOT NULL UNIQUE,
     cnpj_basico char(8) NOT NULL REFERENCES empresas(cnpj_basico),
     cnpj_ordem char(4) NOT NULL,
     cnpj_dv char(2) NOT NULL,
@@ -80,7 +83,8 @@ CREATE TABLE IF NOT EXISTS socios (
 ALTER TABLE socios ALTER COLUMN representante_legal TYPE text;
 
 CREATE TABLE IF NOT EXISTS simples (
-    cnpj_basico char(8) PRIMARY KEY REFERENCES empresas(cnpj_basico) ON DELETE CASCADE,
+    id bigserial PRIMARY KEY,
+    cnpj_basico char(8) NOT NULL UNIQUE REFERENCES empresas(cnpj_basico) ON DELETE CASCADE,
     opcao_simples char(1),
     data_opcao_simples date,
     data_exclusao_simples date,
@@ -92,47 +96,56 @@ CREATE TABLE IF NOT EXISTS simples (
 );
 
 CREATE TABLE IF NOT EXISTS cnaes (
-    codigo char(7) PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    codigo char(7) NOT NULL UNIQUE,
     descricao text NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS municipios (
-    codigo text PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    codigo text NOT NULL UNIQUE,
     descricao text NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS naturezas_juridicas (
-    codigo text PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    codigo text NOT NULL UNIQUE,
     descricao text NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS qualificacoes_socios (
-    codigo text PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    codigo text NOT NULL UNIQUE,
     descricao text NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS motivos (
-    codigo text PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    codigo text NOT NULL UNIQUE,
     descricao text NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS paises (
-    codigo text PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    codigo text NOT NULL UNIQUE,
     descricao text NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS situacoes_cadastrais (
-    codigo char(2) PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    codigo char(2) NOT NULL UNIQUE,
     descricao text NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS portes (
-    codigo char(2) PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    codigo char(2) NOT NULL UNIQUE,
     descricao text NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS matriz_filial (
-    codigo char(1) PRIMARY KEY,
+    id bigserial PRIMARY KEY,
+    codigo char(1) NOT NULL UNIQUE,
     descricao text NOT NULL
 );
 

@@ -168,7 +168,7 @@ def create_staging(connection: psycopg.Connection, limit_rows: int = 0) -> None:
     ]:
         connection.execute(f"DROP TABLE IF EXISTS {staging} CASCADE")
         connection.execute(
-            f"CREATE UNLOGGED TABLE {staging} (LIKE {base} INCLUDING DEFAULTS)"
+            f"CREATE UNLOGGED TABLE {staging} (LIKE {base} INCLUDING DEFAULTS INCLUDING IDENTITY)"
         )
     connection.commit()
 
@@ -236,19 +236,31 @@ def build_indexes(connection: psycopg.Connection) -> None:
 
     started = time.monotonic()
     statements = [
-        f"ALTER TABLE {STG['empresas']} ADD PRIMARY KEY (cnpj_basico)",
-        f"ALTER TABLE {STG['estabelecimentos']} ADD PRIMARY KEY (cnpj_completo)",
+        f"ALTER TABLE {STG['empresas']} ADD PRIMARY KEY (id)",
+        f"ALTER TABLE {STG['empresas']} ADD CONSTRAINT uq_empresas_cnpj_basico UNIQUE (cnpj_basico)",
+        f"ALTER TABLE {STG['estabelecimentos']} ADD PRIMARY KEY (id)",
+        f"ALTER TABLE {STG['estabelecimentos']} ADD CONSTRAINT uq_estabelecimentos_cnpj UNIQUE (cnpj_completo)",
         f"ALTER TABLE {STG['estabelecimento_cnaes']} ADD PRIMARY KEY (id)",
         f"CREATE INDEX ON {STG['estabelecimento_cnaes']} (cnpj_completo, cnae_codigo)",
         f"ALTER TABLE {STG['socios']} ADD PRIMARY KEY (id)",
+        f"ALTER TABLE {STG['socios']} ADD CONSTRAINT uq_socios_business UNIQUE ("
+        "cnpj_basico, identificador_socio, documento_socio_mascarado,"
+        " nome_socio, qualificacao_socio_codigo, data_entrada_sociedade)",
         f"CREATE INDEX ON {STG['socios']} (cnpj_basico)",
-        f"ALTER TABLE {STG['simples']} ADD PRIMARY KEY (cnpj_basico)",
-        "ALTER TABLE stg_cnaes ADD PRIMARY KEY (codigo)",
-        "ALTER TABLE stg_municipios ADD PRIMARY KEY (codigo)",
-        "ALTER TABLE stg_naturezas_juridicas ADD PRIMARY KEY (codigo)",
-        "ALTER TABLE stg_qualificacoes_socios ADD PRIMARY KEY (codigo)",
-        "ALTER TABLE stg_motivos ADD PRIMARY KEY (codigo)",
-        "ALTER TABLE stg_paises ADD PRIMARY KEY (codigo)",
+        f"ALTER TABLE {STG['simples']} ADD PRIMARY KEY (id)",
+        f"ALTER TABLE {STG['simples']} ADD CONSTRAINT uq_simples_cnpj_basico UNIQUE (cnpj_basico)",
+        "ALTER TABLE stg_cnaes ADD PRIMARY KEY (id)",
+        "ALTER TABLE stg_cnaes ADD CONSTRAINT uq_cnaes_codigo UNIQUE (codigo)",
+        "ALTER TABLE stg_municipios ADD PRIMARY KEY (id)",
+        "ALTER TABLE stg_municipios ADD CONSTRAINT uq_municipios_codigo UNIQUE (codigo)",
+        "ALTER TABLE stg_naturezas_juridicas ADD PRIMARY KEY (id)",
+        "ALTER TABLE stg_naturezas_juridicas ADD CONSTRAINT uq_naturezas_codigo UNIQUE (codigo)",
+        "ALTER TABLE stg_qualificacoes_socios ADD PRIMARY KEY (id)",
+        "ALTER TABLE stg_qualificacoes_socios ADD CONSTRAINT uq_qualificacoes_codigo UNIQUE (codigo)",
+        "ALTER TABLE stg_motivos ADD PRIMARY KEY (id)",
+        "ALTER TABLE stg_motivos ADD CONSTRAINT uq_motivos_codigo UNIQUE (codigo)",
+        "ALTER TABLE stg_paises ADD PRIMARY KEY (id)",
+        "ALTER TABLE stg_paises ADD CONSTRAINT uq_paises_codigo UNIQUE (codigo)",
         f"CREATE INDEX ON {STG['estabelecimento_cnaes']} (cnae_codigo)",
     ]
     for statement in statements:
@@ -377,29 +389,7 @@ def swap(connection: psycopg.Connection, competencia: str, fonte: str, counts: d
             connection.execute(f"DROP TABLE IF EXISTS {base} CASCADE")
             connection.execute(f"ALTER TABLE {staging} RENAME TO {base}")
 
-        # sequência própria para socios.id após o swap
-        connection.execute("CREATE SEQUENCE IF NOT EXISTS socios_id_seq2")
-        connection.execute(
-            "ALTER TABLE socios ALTER COLUMN id SET DEFAULT nextval('socios_id_seq2')"
-        )
-        connection.execute(
-            "SELECT setval('socios_id_seq2', COALESCE((SELECT max(id) FROM socios), 1), true)"
-        )
-        connection.execute("ALTER SEQUENCE socios_id_seq2 OWNED BY socios.id")
-
-        # idem para estabelecimento_cnaes.id (bigserial vindo da staging)
-        connection.execute("CREATE SEQUENCE IF NOT EXISTS estabelecimento_cnaes_id_seq2")
-        connection.execute(
-            "ALTER TABLE estabelecimento_cnaes ALTER COLUMN id"
-            " SET DEFAULT nextval('estabelecimento_cnaes_id_seq2')"
-        )
-        connection.execute(
-            "SELECT setval('estabelecimento_cnaes_id_seq2',"
-            " COALESCE((SELECT max(id) FROM estabelecimento_cnaes), 1), true)"
-        )
-        connection.execute(
-            "ALTER SEQUENCE estabelecimento_cnaes_id_seq2 OWNED BY estabelecimento_cnaes.id"
-        )
+        # ids vêm de IDENTITY criada em cada staging (INCLUDING IDENTITY); nada a corrigir
 
         connection.execute(
             """
