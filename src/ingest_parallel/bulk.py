@@ -409,6 +409,28 @@ def swap(connection: psycopg.Connection, competencia: str, fonte: str, counts: d
         connection.execute("UPDATE query_metadata SET ativo = false WHERE competencia <> %s", (competencia,))
 
 
+def set_logged(connection: psycopg.Connection) -> None:
+    """Converte as tabelas publicadas de UNLOGGED para LOGGED (durabilidade + FKs).
+
+    A staging é UNLOGGED por velocidade; após o swap a versão ativa precisa ser
+    LOGGED (WAL/replicação e FKs entre tabelas permanentes).
+    """
+
+    for table in (
+        "empresas",
+        "estabelecimentos",
+        "estabelecimento_cnaes",
+        "socios",
+        "simples",
+        "estabelecimentos_listagem",
+        *LOOKUP_TABLES,
+    ):
+        started = time.monotonic()
+        connection.execute(f"ALTER TABLE {table} SET LOGGED")
+        connection.commit()
+        log.info("SET LOGGED %-28s %.1fs", table, time.monotonic() - started)
+
+
 def derived_small(connection: psycopg.Connection) -> None:
     connection.execute(
         """
@@ -547,6 +569,7 @@ def run_bulk(
         log.info("contagens: %s", counts)
         swap(connection, competencia, fonte, counts)
         derived_small(connection)
+        set_logged(connection)
         connection.commit()
 
     # 5. ANALYZE fora da transação de swap
