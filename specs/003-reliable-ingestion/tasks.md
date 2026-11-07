@@ -36,9 +36,9 @@
 
 **Purpose**: Estrutura do package e ferramentas de teste
 
-- [ ] T001 Criar esqueleto do package `src/ingest_parallel/` (`__init__.py` + módulos vazios `config.py`, `contracts.py`, `inventory.py`, `partitioning.py`, `normalize.py`, `lakehouse.py`, `serving.py`, `publish.py`, `orchestrate.py`, `quality.py`, `observability.py`, `reject.py`, `benchmark.py`) e diretórios `tests/ingest_parallel/{unit,integration,contract}/` com `conftest.py`
-- [ ] T002 [P] Adicionar dependências de teste em `pyproject.toml`: `pytest`, `pyiceberg[pyarrow,sql-postgres]`, `pyarrow`, `duckdb`, `psycopg[binary,pool]`, e fixture de Postgres de teste (`docker compose` reusando o `query-db` atual em banco separado `cnpj_ingest_test`)
-- [ ] T003 [P] Criar `src/ingest_parallel/__init__.py` com export para `load_config()` e definir constantes de ambiente documentadas no README do package (`CNPJ_INGEST_*`)
+- [X] T001 Criar esqueleto do package `src/ingest_parallel/` (`__init__.py` + módulos vazios `config.py`, `contracts.py`, `inventory.py`, `partitioning.py`, `normalize.py`, `lakehouse.py`, `serving.py`, `publish.py`, `orchestrate.py`, `quality.py`, `observability.py`, `reject.py`, `benchmark.py`) e diretórios `tests/ingest_parallel/{unit,integration,contract}/` com `conftest.py`
+- [X] T002 [P] Adicionar dependências de teste em `pyproject.toml`: `pytest`, `pyiceberg[pyarrow,sql-postgres]`, `pyarrow`, `duckdb`, `psycopg[binary,pool]`, e fixture de Postgres de teste (`docker compose` reusando o `query-db` atual em banco separado `cnpj_ingest_test`)
+- [X] T003 [P] Criar `src/ingest_parallel/__init__.py` com export para `load_config()` e definir constantes de ambiente documentadas no README do package (`CNPJ_INGEST_*`)
 
 ---
 
@@ -50,18 +50,18 @@
 
 ### Testes (escrever primeiro, ver falhar)
 
-- [ ] T004 [P] Teste unitário de `load_id` determinístico em `tests/ingest_parallel/unit/test_config.py`: dado `competencia=2026-10` e `data_version_id`, `load_id = "2026-10-{sha8}"` é estável entre execuções (FR-014)
-- [ ] T005 [P] Teste unitário de registro de identidade em `tests/ingest_parallel/unit/test_contracts.py`: business keys por dataset conforme data-model §5.6 — `empresa=[cnpj_basico]`, `estabelecimento=[cnpj_completo]`, `socio=[cnpj_basico, identificador_socio, documento_mascarado, nome, qualificacao, data_entrada]`, `simples=[cnpj_basico]` (FR-003, FR-004)
-- [ ] T006 [P] Teste unitário de sanitização em `tests/ingest_parallel/unit/test_observability.py`: mensagem contendo CPF completo `123.456.789-09` sai mascarado (`***...`), log estruturado com `load_id/run_id/etapa` (FR-043, Edge "CPF em log")
-- [ ] T007 [P] Teste de contrato do manifesto em `tests/ingest_parallel/contract/test_source_manifest.py`: `source_count == 37`, `competencia` válida `AAAA-MM`, arquivo ausente → `SOURCE_FILE_MISSING`, hash divergente → `SOURCE_HASH_MISMATCH`, competência inválida → `COMPETENCIA_INVALID` (contratos/source_manifest.md §4)
+- [X] T004 [P] Teste unitário de `load_id` determinístico em `tests/ingest_parallel/unit/test_config.py`: dado `competencia=2026-10` e `data_version_id`, `load_id = "2026-10-{sha8}"` é estável entre execuções (FR-014)
+- [X] T005 [P] Teste unitário de registro de identidade em `tests/ingest_parallel/unit/test_contracts.py`: business keys por dataset conforme data-model §5.6 — `empresa=[cnpj_basico]`, `estabelecimento=[cnpj_completo]`, `socio=[cnpj_basico, identificador_socio, documento_mascarado, nome, qualificacao, data_entrada]`, `simples=[cnpj_basico]` (FR-003, FR-004)
+- [X] T006 [P] Teste unitário de sanitização em `tests/ingest_parallel/unit/test_observability.py`: mensagem contendo CPF completo `123.456.789-09` sai mascarado (`***...`), log estruturado com `load_id/run_id/etapa` (FR-043, Edge "CPF em log")
+- [X] T007 [P] Teste de contrato do manifesto em `tests/ingest_parallel/contract/test_source_manifest.py`: `source_count == 37`, `competencia` válida `AAAA-MM`, arquivo ausente → `SOURCE_FILE_MISSING`, hash divergente → `SOURCE_HASH_MISMATCH`, competência inválida → `COMPETENCIA_INVALID` (contratos/source_manifest.md §4)
 
 ### Implementação
 
-- [ ] T008 Implementar `src/ingest_parallel/config.py`: carrega `CNPJ_INGEST_*` (competencia, storage root, catalog URL, serving DSN), `load_id` determinístico, `code_version` (git SHA), `max_workers=8`, `target_file_size_bytes=536870912` (depende T004)
-- [ ] T009 [P] Implementar `src/ingest_parallel/contracts.py`: Dataset Identity Registry (`DATASET_REGISTRY` dict com business keys, `dedup_policy=keep_last`, `pii_policy=mask` para socio), helper `identity_key(dataset, row)` (depende T005)
-- [ ] T010 [P] Implementar `src/ingest_parallel/observability.py`: logger estruturado JSON, sanitizador de PII/segredos, `MetricsRecorder` por etapa (duração, volume, rejects, retry) gravável em Postgres `ingestion_run`/`load_partition` (FR-041/044) (depende T008)
-- [ ] T011 Implementar `src/ingest_parallel/reject.py`: ledger de rejeições `ingestion_reject` (load_id, partition_id, table, reject_type, reason_detail sanitizado, source_file_hash, source_row_offset) com tipos `schema_mismatch`, `duplicate`, `invalid_data`, `missing_required_field`, `max_length_exceeded` (FR-038, data-model §5.4) (depende T009, T010)
-- [ ] T012 Implementar `src/ingest_parallel/inventory.py`: varre Bronze `data/bronze/<competencia>/` (37 Parquet), calcula hashes SHA-256, row counts por metadata Parquet, monta Source Manifest com `data_version_id = sha256(concat(hashes))`, valida contra contracts/source_manifest.md (FR-001) (depende T008; valida T007)
+- [X] T008 Implementar `src/ingest_parallel/config.py`: carrega `CNPJ_INGEST_*` (competencia, storage root, catalog URL, serving DSN), `load_id` determinístico, `code_version` (git SHA), `max_workers=8`, `target_file_size_bytes=536870912` (depende T004)
+- [X] T009 [P] Implementar `src/ingest_parallel/contracts.py`: Dataset Identity Registry (`DATASET_REGISTRY` dict com business keys, `dedup_policy=keep_last`, `pii_policy=mask` para socio), helper `identity_key(dataset, row)` (depende T005)
+- [X] T010 [P] Implementar `src/ingest_parallel/observability.py`: logger estruturado JSON, sanitizador de PII/segredos, `MetricsRecorder` por etapa (duração, volume, rejects, retry) gravável em Postgres `ingestion_run`/`load_partition` (FR-041/044) (depende T008)
+- [X] T011 Implementar `src/ingest_parallel/reject.py`: ledger de rejeições `ingestion_reject` (load_id, partition_id, table, reject_type, reason_detail sanitizado, source_file_hash, source_row_offset) com tipos `schema_mismatch`, `duplicate`, `invalid_data`, `missing_required_field`, `max_length_exceeded` (FR-038, data-model §5.4) (depende T009, T010)
+- [X] T012 Implementar `src/ingest_parallel/inventory.py`: varre Bronze `data/bronze/<competencia>/` (37 Parquet), calcula hashes SHA-256, row counts por metadata Parquet, monta Source Manifest com `data_version_id = sha256(concat(hashes))`, valida contra contracts/source_manifest.md (FR-001) (depende T008; valida T007)
 
 **Checkpoint**: Identidade, manifesto, ledger de rejeitos e observabilidade prontos — stories podem iniciar
 
