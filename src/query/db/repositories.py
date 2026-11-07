@@ -161,12 +161,40 @@ def _stats_eligible(filtros: "EstabelecimentoFiltros") -> bool:
     )
 
 
+def _cnae_stats_eligible(filtros: "EstabelecimentoFiltros") -> bool:
+    """CNAE (+UF) coberto pelo cubo `estabelecimentos_cnae_uf_stats`."""
+
+    return (
+        not filtros.q
+        and not filtros.municipio
+        and not filtros.abertura_de
+        and not filtros.abertura_ate
+        and not filtros.situacao
+        and not filtros.porte
+        and not filtros.matriz_filial
+        and filtros.simples == "qualquer"
+        and filtros.mei == "qualquer"
+    )
+
+
 def contar_estabelecimentos(
     connection: psycopg.Connection, filtros: "EstabelecimentoFiltros"
 ) -> int:
     if not _has_filters(filtros):
         metadata = active_metadata(connection)
         return int(metadata["total_estabelecimentos"]) if metadata else 0
+    if filtros.cnae and _cnae_stats_eligible(filtros):
+        clauses = ["cnae_codigo = %s"]
+        params: list[Any] = [filtros.cnae]
+        if filtros.uf:
+            clauses.append("uf = %s")
+            params.append(filtros.uf)
+        row = connection.execute(
+            "SELECT COALESCE(sum(total), 0) FROM estabelecimentos_cnae_uf_stats"
+            " WHERE " + " AND ".join(clauses),
+            tuple(params),
+        ).fetchone()
+        return int(row[0])
     if _stats_eligible(filtros):
         where, params = _stats_where(filtros)
         row = connection.execute(

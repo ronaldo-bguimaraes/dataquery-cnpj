@@ -238,7 +238,8 @@ def build_indexes(connection: psycopg.Connection) -> None:
     statements = [
         f"ALTER TABLE {STG['empresas']} ADD PRIMARY KEY (cnpj_basico)",
         f"ALTER TABLE {STG['estabelecimentos']} ADD PRIMARY KEY (cnpj_completo)",
-        f"ALTER TABLE {STG['estabelecimento_cnaes']} ADD PRIMARY KEY (cnpj_completo, cnae_codigo)",
+        f"ALTER TABLE {STG['estabelecimento_cnaes']} ADD PRIMARY KEY (id)",
+        f"CREATE INDEX ON {STG['estabelecimento_cnaes']} (cnpj_completo, cnae_codigo)",
         f"ALTER TABLE {STG['socios']} ADD PRIMARY KEY (id)",
         f"CREATE INDEX ON {STG['socios']} (cnpj_basico)",
         f"ALTER TABLE {STG['simples']} ADD PRIMARY KEY (cnpj_basico)",
@@ -386,6 +387,20 @@ def swap(connection: psycopg.Connection, competencia: str, fonte: str, counts: d
         )
         connection.execute("ALTER SEQUENCE socios_id_seq2 OWNED BY socios.id")
 
+        # idem para estabelecimento_cnaes.id (bigserial vindo da staging)
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS estabelecimento_cnaes_id_seq2")
+        connection.execute(
+            "ALTER TABLE estabelecimento_cnaes ALTER COLUMN id"
+            " SET DEFAULT nextval('estabelecimento_cnaes_id_seq2')"
+        )
+        connection.execute(
+            "SELECT setval('estabelecimento_cnaes_id_seq2',"
+            " COALESCE((SELECT max(id) FROM estabelecimento_cnaes), 1), true)"
+        )
+        connection.execute(
+            "ALTER SEQUENCE estabelecimento_cnaes_id_seq2 OWNED BY estabelecimento_cnaes.id"
+        )
+
         connection.execute(
             """
             INSERT INTO query_metadata (
@@ -437,6 +452,18 @@ def derived_small(connection: psycopg.Connection) -> None:
                optante_simples, optante_mei, count(*)
         FROM estabelecimentos_listagem
         GROUP BY 1, 2, 3, 4, 5, 6
+        """
+    )
+    # Contagens por CNAE × UF (CNAE sozinho tem ~1M de linhas por código)
+    connection.execute("TRUNCATE estabelecimentos_cnae_uf_stats")
+    connection.execute(
+        """
+        INSERT INTO estabelecimentos_cnae_uf_stats (cnae_codigo, uf, total)
+        SELECT ec.cnae_codigo, e.uf, count(*)
+        FROM estabelecimento_cnaes ec
+        JOIN estabelecimentos_listagem e USING (cnpj_completo)
+        WHERE e.uf IS NOT NULL AND e.uf <> ''
+        GROUP BY 1, 2
         """
     )
     connection.commit()

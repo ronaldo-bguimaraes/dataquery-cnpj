@@ -56,10 +56,10 @@ CREATE TABLE IF NOT EXISTS estabelecimentos (
 );
 
 CREATE TABLE IF NOT EXISTS estabelecimento_cnaes (
+    id bigserial PRIMARY KEY,
     cnpj_completo char(14) NOT NULL REFERENCES estabelecimentos(cnpj_completo) ON DELETE CASCADE,
     cnae_codigo char(7) NOT NULL,
-    principal boolean NOT NULL DEFAULT false,
-    PRIMARY KEY (cnpj_completo, cnae_codigo)
+    principal boolean NOT NULL DEFAULT false
 );
 
 CREATE TABLE IF NOT EXISTS socios (
@@ -160,6 +160,14 @@ CREATE TABLE IF NOT EXISTS estabelecimentos_filtros_stats (
     PRIMARY KEY (uf, situacao_codigo, porte_codigo, matriz_filial, optante_simples, optante_mei)
 );
 
+-- Contagens por CNAE × UF (evita nested loop de 1M+ linhas para count)
+CREATE TABLE IF NOT EXISTS estabelecimentos_cnae_uf_stats (
+    cnae_codigo char(7) NOT NULL,
+    uf char(2) NOT NULL,
+    total bigint NOT NULL,
+    PRIMARY KEY (cnae_codigo, uf)
+);
+
 CREATE TABLE IF NOT EXISTS estabelecimentos_listagem (
     cnpj_completo char(14) PRIMARY KEY,
     cnpj_basico char(8) NOT NULL,
@@ -196,6 +204,8 @@ CREATE INDEX IF NOT EXISTS idx_estab_list_razao_trgm
     ON estabelecimentos_listagem USING gin (razao_social_normalizada gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_estab_cnaes_cnae
     ON estabelecimento_cnaes (cnae_codigo);
+CREATE INDEX IF NOT EXISTS idx_estab_cnaes_cnpj_cnae
+    ON estabelecimento_cnaes (cnpj_completo, cnae_codigo);
 CREATE INDEX IF NOT EXISTS idx_socios_cnpj_basico
     ON socios (cnpj_basico);
 
