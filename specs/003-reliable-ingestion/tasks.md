@@ -103,16 +103,16 @@
 
 ### Testes (escrever primeiro, ver falhar)
 
-- [ ] T025 [P] [US2] Teste de integração de retry idempotente em `tests/ingest_parallel/integration/test_retry_idempotency.py`: mesma `load_id` executada 2× → contagens idênticas, 0 duplicatas, reject ledger não cresce (US2 aceite 3, FR-013/015; quickstart §6)
-- [ ] T026 [P] [US2] Teste de integração de retomada em `tests/ingest_parallel/integration/test_resume_checkpoint.py`: kill após N partições, restart → apenas partições `pending/failed` rodam; concluídas puladas (US2 aceite 1–2, FR-020/021)
+- [X] T025 [P] [US2] Teste de integração de retry idempotente em `tests/ingest_parallel/integration/test_retry_idempotency.py`: mesma `load_id` executada 2× → contagens idênticas, 0 duplicatas, reject ledger não cresce (US2 aceite 3, FR-013/015; quickstart §6)
+- [X] T026 [P] [US2] Teste de integração de retomada em `tests/ingest_parallel/integration/test_resume_checkpoint.py`: kill após N partições, restart → apenas partições `pending/failed` rodam; concluídas puladas (US2 aceite 1–2, FR-020/021)
 
 ### Implementação
 
-- [ ] T027 [US2] Implementar checkpoint durável em `src/ingest_parallel/orchestrate.py`: tabela `load_partition` (Postgres) com `status`, `owner_lease` com TTL, `retry_count`, `completed_at`; claim atômico via `UPDATE ... WHERE status='pending' AND lease IS NULL RETURNING` (FR-020, FR-022, data-model §5.2/§7.1) (depende T023)
-- [ ] T028 [US2] Implementar transferência de lease: worker morto → lease expira → nova instância assume a MESMA `partition_id` determinística, sem duas escritas concorrentes (lease held check antes de cada commit) (FR-022, US2 aceite 4) (depende T027)
-- [ ] T029 [US2] Implementar retomada no runner CLI `python -m src.ingest_parallel.orchestrate --resume <load_id>` (e path da DAG): reconcilia partições concluídas, lista pendentes, retoma checkpoint (FR-021, Edge "worker morre durante commit") (depende T027)
-- [ ] T030 [US2] Implementar idempotência de escrita Iceberg: append na branch sob mesmo `load_id` só se snapshot anterior não contém o mesmo `partition_id`; caso exista, substitui apenas os arquivos daquela partição (FR-013, contracts/lakehouse_silver.md §5) (depende T027; valida T025)
-- [ ] T031 [US2] Registrar status/causa sanitizada permanente: `ingestion_run.error_summary` (sem PII), histórico consultável para diagnóstico e nova tentativa (FR-041, US2 aceite 5) (depende T010, T028)
+- [X] T027 [US2] Implementar checkpoint durável em `src/ingest_parallel/orchestrate.py`: tabela `load_partition` (Postgres) com `status`, `owner_lease` com TTL, `retry_count`, `completed_at`; claim atômico via `UPDATE ... WHERE status='pending' AND lease IS NULL RETURNING` (FR-020, FR-022, data-model §5.2/§7.1) (depende T023)
+- [X] T028 [US2] Implementar transferência de lease: worker morto → lease expira → nova instância assume a MESMA `partition_id` determinística, sem duas escritas concorrentes (lease held check antes de cada commit) (FR-022, US2 aceite 4) (depende T027)
+- [X] T029 [US2] Implementar retomada no runner CLI `python -m src.ingest_parallel.orchestrate --resume <load_id>` (e path da DAG): reconcilia partições concluídas, lista pendentes, retoma checkpoint (FR-021, Edge "worker morre durante commit") (depende T027)
+- [X] T030 [US2] Implementar idempotência de escrita Iceberg: append na branch sob mesmo `load_id` só se snapshot anterior não contém o mesmo `partition_id`; caso exista, substitui apenas os arquivos daquela partição (FR-013, contracts/lakehouse_silver.md §5) (depende T027; valida T025)
+- [X] T031 [US2] Registrar status/causa sanitizada permanente: `ingestion_run.error_summary` (sem PII), histórico consultável para diagnóstico e nova tentativa (FR-041, US2 aceite 5) (depende T010, T028)
 
 **Checkpoint**: US1 + US2 independentes — falha/retry/retomada seguros
 

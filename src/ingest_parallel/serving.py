@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS ingestion_run (
     competencia text NOT NULL,
     status text NOT NULL,
     code_version text,
+    error_summary text,
     started_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS load_partition (
@@ -51,6 +52,7 @@ CREATE TABLE IF NOT EXISTS load_partition (
     partition_id text NOT NULL,
     table_name text NOT NULL,
     status text NOT NULL,
+    worker_id text,
     owner_lease timestamptz,
     retry_count int NOT NULL DEFAULT 0,
     completed_at timestamptz,
@@ -77,6 +79,15 @@ def ensure_run_tables(connection: psycopg.Connection) -> None:
     """Cria as tabelas de estado da execução (idempotente)."""
 
     connection.execute(RUN_TABLES_SQL)
+    # worker_id pode não existir em esquemas anteriores; adiciona idempotentemente.
+    existing = {
+        row[0]
+        for row in connection.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'load_partition'"
+        ).fetchall()
+    }
+    if "worker_id" not in existing:
+        connection.execute("ALTER TABLE load_partition ADD COLUMN worker_id text")
 
 
 def create_staging(connection: psycopg.Connection, load_id: str) -> list[str]:
@@ -124,12 +135,14 @@ def _swap(connection: psycopg.Connection, counts: DatasetCounts, competencia: st
         connection.execute("SET LOCAL lock_timeout = '2s'")
         for table in SERVING_TABLES:
             staging = staging_table_name(table, counts.load_id)
-            # Constraint mínima de unicidade no swap final (contrato §3.3)
             pk_col = "cnpj_completo" if table == "estabelecimentos" else "cnpj_basico"
-            connection.execute(
-                f"ALTER TABLE {_q(staging)} ADD CONSTRAINT {_q(staging + '_pk')} PRIMARY KEY ({_q(pk_col)})"
-            )
+            pk_name = staging + "_pk"
+            # A base antiga leva o nome da constraint (RENAME não renomeia constraint:
+            # droppar a base antes de criar o novo PK evita colisão de nomes globais).
             connection.execute(f"DROP TABLE IF EXISTS {_q(table)} CASCADE")
+            connection.execute(
+                f"ALTER TABLE {_q(staging)} ADD CONSTRAINT {_q(pk_name)} PRIMARY KEY ({_q(pk_col)})"
+            )
             connection.execute(f"ALTER TABLE {_q(staging)} RENAME TO {_q(table)}")
 
         connection.execute("UPDATE query_metadata SET ativo = false WHERE ativo")

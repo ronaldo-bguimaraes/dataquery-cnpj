@@ -11,6 +11,41 @@ from typing import Any
 
 import psycopg
 
+from src.ingest_parallel.serving import ensure_run_tables
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI de retomada: `python -m src.ingest_parallel.orchestrate --resume <load_id>`."""
+
+    import json
+    import os
+
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="src.ingest_parallel.orchestrate")
+    parser.add_argument("--resume", required=False, help="load_id para retomar")
+    args = parser.parse_args(argv)
+    if not args.resume:
+        parser.error("--resume é obrigatório")
+    dsn = os.environ.get(
+        "CNPJ_INGEST_SERVING_DSN",
+        "postgresql://cnpj_query_loader:change-me@127.0.0.1:55432/cnpj_query_test",
+    )
+    resumed: list[str] = []
+    with psycopg.connect(dsn) as connection:
+        ensure_run_tables(connection)
+        resumed = resume_incomplete(
+            connection, args.resume, task=lambda pid, table: resumed.append(pid)
+        )
+    print(
+        json.dumps(
+            {"load_id": args.resume, "retomadas": resumed},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
 
 class OrchestrationError(RuntimeError):
     """Estado inconsistente entre lote e dado durável."""
@@ -32,6 +67,86 @@ def ensure_partition_record(
         """,
         (load_id, partition_id, table_name, status),
     )
+
+
+def claim_partition(
+    connection: psycopg.Connection,
+    load_id: str,
+    partition_id: str,
+    worker_id: str,
+    *,
+    lease_seconds: int = 900,
+) -> bool:
+    """Claim atômico de propriedade (FR-022): só quem fizer UPDATE ganha o lease.
+
+    Só é elegível quando o lote não está concluído e o lease anterior expirou —
+    nunca há duas escritas concorrentes para a mesma partição.
+    """
+
+    result = connection.execute(
+        f"""
+        UPDATE load_partition
+        SET status = 'running', worker_id = %s,
+            owner_lease = now() + interval '{lease_seconds} seconds'
+        WHERE load_id = %s AND partition_id = %s
+          AND status IN ('pending', 'failed', 'running')
+          AND (worker_id IS NULL OR worker_id = %s
+               OR owner_lease IS NULL OR owner_lease < now())
+        RETURNING worker_id
+        """,
+        (worker_id, load_id, partition_id, worker_id),
+    ).fetchone()
+    return result is not None
+
+
+def release_partition(
+    connection: psycopg.Connection,
+    load_id: str,
+    partition_id: str,
+    worker_id: str,
+) -> None:
+    """Libera o lease sem concluir (worker morre / aborta)."""
+
+    connection.execute(
+        """
+        UPDATE load_partition
+        SET status = 'pending', worker_id = NULL, owner_lease = NULL
+        WHERE load_id = %s AND partition_id = %s AND worker_id = %s
+        """,
+        (load_id, partition_id, worker_id),
+    )
+
+
+def resume_incomplete(connection: psycopg.Connection, load_id: str, task) -> list[str]:  # noqa: ANN001
+    """Retomada segura (FR-020/021): roda `task` apenas em partições não concluídas.
+
+    `task(partition_id, table_name)` precisa ser idempotente; concluídas são puladas.
+    """
+
+    rows = connection.execute(
+        """
+        SELECT partition_id, table_name, status, worker_id, owner_lease
+        FROM load_partition
+        WHERE load_id = %s
+          AND NOT (status = 'succeeded')
+          AND (owner_lease IS NULL OR owner_lease < now())
+        ORDER BY partition_id
+        """,
+        (load_id,),
+    ).fetchall()
+    executed: list[str] = []
+    for partition_id, table_name, status, worker_id, _lease in rows:
+        if status == "running" and worker_id:
+            # lease de outro worker ativo: não retomar (FR-022)
+            continue
+        try:
+            task(partition_id, table_name)
+        except Exception:
+            mark_partition_failed(connection, load_id, partition_id)
+            raise
+        mark_partition_succeeded(connection, load_id, partition_id)
+        executed.append(partition_id)
+    return executed
 
 
 def mark_partition_succeeded(
@@ -75,3 +190,8 @@ def partitions_status(connection: psycopg.Connection, load_id: str) -> list[dict
         {"partition_id": row[0], "table_name": row[1], "status": row[2]}
         for row in rows
     ]
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
+

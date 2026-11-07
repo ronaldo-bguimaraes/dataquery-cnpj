@@ -46,6 +46,37 @@ def log_event(logger: logging.Logger, event: str, **fields: Any) -> None:
     logger.info(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
+def record_run_error(
+    connection: Any,  # psycopg.Connection
+    *,
+    run_id: str,
+    load_id: str,
+    competencia: str,
+    status: str,
+    error_summary: str | None = None,
+) -> None:
+    """Persiste o run no histórico com causa sanitizada e sem PII (FR-041, US2 aceite 5)."""
+
+    connection.execute(
+        """
+        INSERT INTO ingestion_run (run_id, load_id, competencia, status, error_summary)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (run_id) DO UPDATE SET
+            status = EXCLUDED.status,
+            error_summary = EXCLUDED.error_summary
+        """,
+        (run_id, load_id, competencia, status, sanitize_text(error_summary or "")),
+    )
+
+
+def code_version_field() -> str:
+    """Alias de conveniência para metadados de run (já sanitizado na origem)."""
+
+    from src.ingest_parallel.config import code_version
+
+    return code_version()
+
+
 class MetricsRecorder:
     """Contadores e duração por etapa de execução (FR-044)."""
 
