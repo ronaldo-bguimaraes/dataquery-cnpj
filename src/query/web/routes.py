@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from src.query.db.repositories import (
+    COUNT_CAP,
     active_metadata,
     listar_cnaes,
     listar_estabelecimentos,
@@ -53,6 +54,9 @@ async def estabelecimentos(request: Request):
             options = opcoes_filtro(connection, uf=filtros.uf)
             notice = "O município informado não pertence à UF selecionada e foi removido."
         rows, total = listar_estabelecimentos(connection, filtros, page_size=page_size)
+        total_capped = total > COUNT_CAP
+        if total_capped:
+            total = COUNT_CAP
         total_pages = math.ceil(total / page_size) if total else 0
         if total_pages and filtros.pagina > total_pages:
             filtros = replace(filtros, pagina=total_pages)
@@ -68,6 +72,7 @@ async def estabelecimentos(request: Request):
         "options": options,
         "rows": listing_rows(rows, filtros),
         "total": total,
+        "total_capped": total_capped,
         "pagination": pagination(filtros, total, page_size),
         "clear_url": clear_url(),
         "back_url": back_url(filtros),

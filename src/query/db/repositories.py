@@ -45,6 +45,9 @@ if TYPE_CHECKING:
     from src.query.web.filters import EstabelecimentoFiltros
 
 
+COUNT_CAP = 50_000
+
+
 def _has_filters(filtros: "EstabelecimentoFiltros") -> bool:
     return any(
         [
@@ -85,8 +88,9 @@ def _where(filtros: "EstabelecimentoFiltros") -> tuple[str, list[Any]]:
         params.append(filtros.municipio)
     if filtros.cnae:
         clauses.append(
-            "EXISTS (SELECT 1 FROM estabelecimento_cnaes ec "
-            "WHERE ec.cnpj_completo = e.cnpj_completo AND ec.cnae_codigo = %s)"
+            "e.cnpj_completo IN ("
+            "SELECT ec.cnpj_completo FROM estabelecimento_cnaes ec "
+            "WHERE ec.cnae_codigo = %s)"
         )
         params.append(filtros.cnae)
     if filtros.porte:
@@ -171,14 +175,18 @@ def contar_estabelecimentos(
         ).fetchone()
         return int(row[0])
     where, params = _where(filtros)
+    # Contagem limitada: para filtros amplos (texto comum, CNAE gigante) parar em
+    # COUNT_CAP+1 evita varrer dezenas de milhões de linhas só para exibir o total.
     row = connection.execute(
-        f"SELECT count(*) FROM estabelecimentos_listagem e {where}", tuple(params)
+        "SELECT count(*) FROM ("
+        f"SELECT 1 FROM estabelecimentos_listagem e {where} LIMIT {COUNT_CAP + 1}"
+        ") capped",
+        tuple(params),
     ).fetchone()
     return int(row[0])
 
 
-LISTING_COLUMNS = """
-    e.cnpj_completo,
+LISTING_COLUMNS = """    e.cnpj_completo,
     e.cnpj_basico,
     e.razao_social,
     e.nome_fantasia,

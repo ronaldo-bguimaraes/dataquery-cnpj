@@ -93,8 +93,8 @@
 
 <section class="resultados" data-total="{{ total }}" data-page="{{ pagination.page }}" aria-live="polite">
   <div class="resumo">
-    <strong>{{ total }} estabelecimento{% if total != 1 %}s{% endif %}</strong>
-    {% if pagination.total_pages %}
+    <strong>{% if total_capped %}Mais de {{ total }}{% else %}{{ total }}{% endif %} estabelecimento{% if total != 1 %}s{% endif %}</strong>
+    {% if pagination.total_pages and not total_capped %}
     <span>Página {{ pagination.page }} de {{ pagination.total_pages }}</span>
     {% endif %}
   </div>
@@ -143,7 +143,7 @@
   {% if pagination.total_pages > 1 %}
   <nav class="paginacao" aria-label="Paginação">
     {% if pagination.has_previous %}<a href="{{ pagination.previous_url }}">Página anterior</a>{% endif %}
-    <span>Página {{ pagination.page }} de {{ pagination.total_pages }}</span>
+    <span>Página {{ pagination.page }}{% if not total_capped %} de {{ pagination.total_pages }}{% endif %}</span>
     {% if pagination.has_next %}<a href="{{ pagination.next_url }}">Próxima página</a>{% endif %}
   </nav>
   {% endif %}
