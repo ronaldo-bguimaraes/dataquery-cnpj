@@ -37,7 +37,10 @@ python -m src.ingest_parallel.bulk \
 ```
 
 Fases: staging → COPY paralelo → dedupe (`keep_last`) → PKs/índices → listagem
-derivada → validação de contagens → swap em uma transação → ANALYZE.
+derivada → validação de contagens → swap em uma transação → **SET LOGGED** → ANALYZE.
+
+> A staging é `UNLOGGED` por velocidade; após o swap o pipeline converte as tabelas
+> publicadas para `LOGGED` (durabilidade/WAL e FKs entre tabelas permanentes).
 
 ## Retomada
 

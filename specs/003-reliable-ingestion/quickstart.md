@@ -149,6 +149,18 @@ Carga completa via `src/ingest_parallel.bulk` (8 processos, Postgres dedicado):
 Contagens publicadas: `empresas=70.517.437`, `estabelecimentos=73.809.378`,
 `sócios=28.495.547`, `simples=50.806.102`; base 81 GB.
 
+Latências medidas no bulk web (73,8M/200M, cache quente):
+
+| Consulta | Latência |
+|---|---|
+| listagem sem filtro | 54 ms |
+| UF | 15–63 ms |
+| UF + situação | 15 ms |
+| CNAE | 20 ms (cubo CNAE×UF) |
+| CNAE + UF | 67 ms |
+| busca por nome comum (`LTDA`) | 311 ms |
+| detalhe | 33 ms |
+
 Obs.: caminho de serving em Postgres (bulk), não o writer Iceberg — o catálogo REST
 ainda não está provisionado. No bulk web, detail p95 ficou < 15 ms; a listagem com
 filtro amplo (UF, ~21M resultados) depende de `VACUUM` + índice para ficar na meta.
