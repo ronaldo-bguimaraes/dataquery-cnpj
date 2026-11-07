@@ -37,9 +37,17 @@ class TransformStats:
         }
 
 
-def _rows(paths: list[Path]) -> Iterator[dict[str, Any]]:
+def _rows(
+    paths: list[Path],
+    row_groups: dict[str, list[int]] | None = None,
+) -> Iterator[dict[str, Any]]:
     for path in paths:
         parquet = pq.ParquetFile(path)
+        groups = (row_groups or {}).get(str(path))
+        if groups is not None:
+            for group in groups:
+                yield from parquet.read_row_group(group).to_pylist()
+            continue
         for batch in parquet.iter_batches(batch_size=50_000):
             yield from batch.to_pylist()
 
@@ -48,8 +56,12 @@ def _text(row: dict[str, Any], key: str) -> str:
     return str(row.get(key) or "").strip().strip('"')
 
 
-def empresas_rows(paths: list[Path], stats: TransformStats) -> Iterator[dict[str, Any]]:
-    for row in _rows(paths):
+def empresas_rows(
+    paths: list[Path],
+    stats: TransformStats,
+    row_groups: dict[str, list[int]] | None = None,
+) -> Iterator[dict[str, Any]]:
+    for row in _rows(paths, row_groups):
         basico = normalize_cnpj(_text(row, "empresa_cnpj_basico"))
         if len(basico) != 8:
             stats.invalid_cnpj += 1
@@ -74,9 +86,11 @@ def empresas_rows(paths: list[Path], stats: TransformStats) -> Iterator[dict[str
 
 
 def estabelecimentos_rows(
-    paths: list[Path], stats: TransformStats
+    paths: list[Path],
+    stats: TransformStats,
+    row_groups: dict[str, list[int]] | None = None,
 ) -> Iterator[tuple[dict[str, Any], list[tuple[str, str, bool]]]]:
-    for row in _rows(paths):
+    for row in _rows(paths, row_groups):
         basico = normalize_cnpj(_text(row, "estabelecimento_cnpj_basico"))
         ordem = normalize_cnpj(_text(row, "estabelecimento_cnpj_ordem"))
         dv = normalize_cnpj(_text(row, "estabelecimento_cnpj_dv"))
@@ -165,8 +179,12 @@ def estabelecimentos_rows(
         )
 
 
-def socios_rows(paths: list[Path], stats: TransformStats) -> Iterator[dict[str, Any]]:
-    for row in _rows(paths):
+def socios_rows(
+    paths: list[Path],
+    stats: TransformStats,
+    row_groups: dict[str, list[int]] | None = None,
+) -> Iterator[dict[str, Any]]:
+    for row in _rows(paths, row_groups):
         basico = normalize_cnpj(_text(row, "socio_cnpj_basico"))
         if len(basico) != 8:
             stats.invalid_cnpj += 1
@@ -193,10 +211,13 @@ def socios_rows(paths: list[Path], stats: TransformStats) -> Iterator[dict[str, 
 
 
 def simples_rows(
-    path: Path, competencia: str, stats: TransformStats
+    path: Path,
+    competencia: str,
+    stats: TransformStats,
+    row_groups: dict[str, list[int]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     reference = competence_end_date(competencia)
-    for row in _rows([path]):
+    for row in _rows([path], row_groups):
         basico = normalize_cnpj(_text(row, "simples_cnpj_basico"))
         if len(basico) != 8:
             stats.invalid_cnpj += 1

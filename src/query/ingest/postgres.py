@@ -132,6 +132,8 @@ def _copy_text(value: Any) -> str:
     if isinstance(value, bool):
         return "t" if value else "f"
     text = str(value)
+    # PostgreSQL text não aceita NUL (0x00); dados RFB contêm NUL em campos livres.
+    text = text.replace("\x00", "")
     return (
         text.replace("\\", "\\\\")
         .replace("\t", r"\t")
