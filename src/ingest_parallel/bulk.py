@@ -275,6 +275,61 @@ def build_derived(connection: psycopg.Connection) -> None:
 
 # --------------------------------------------------------------------- validation
 
+def staging_ready(connection: psycopg.Connection, expected: dict[str, int]) -> bool:
+    """True quando a staging já contém a carga completa (permite retomar sem recarregar)."""
+
+    for table, total in expected.items():
+        staging = STG[table] if table in STG else f"stg_{table}"
+        exists = connection.execute(
+            "SELECT to_regclass(%s) IS NOT NULL", (staging,)
+        ).fetchone()[0]
+        if not exists:
+            return False
+        count = connection.execute(f"SELECT count(*) FROM {staging}").fetchone()[0]
+        if count < total * 0.99:
+            log.warning("staging incompleta: %s=%s de %s", staging, count, total)
+            return False
+    return True
+
+
+def dedupe_staging(connection: psycopg.Connection) -> dict[str, int]:
+    """Aplica `keep_last` das business keys antes de criar as PKs (FR-003/004).
+
+    A fonte RFB tem duplicatas pontuais (ex.: 1 `cnpj_basico` repetido em 2026-10);
+    o contrato manda deduplicar, não falhar.
+    """
+
+    specs = [
+        ("stg_empresas", ("cnpj_basico",)),
+        ("stg_estabelecimentos", ("cnpj_completo",)),
+        ("stg_simples", ("cnpj_basico",)),
+        (
+            "stg_socios",
+            (
+                "cnpj_basico",
+                "identificador_socio",
+                "documento_socio_mascarado",
+                "nome_socio",
+                "qualificacao_socio_codigo",
+                "data_entrada_sociedade",
+            ),
+        ),
+    ]
+    removed: dict[str, int] = {}
+    for table, keys in specs:
+        started = time.monotonic()
+        condition = " AND ".join(f"a.{key} = b.{key}" for key in keys)
+        before = connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        connection.execute(
+            f"DELETE FROM {table} a USING {table} b WHERE a.ctid < b.ctid AND {condition}"
+        )
+        connection.commit()
+        after = connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        removed[table] = before - after
+        log.info("dedupe %-22s removidas %8d em %.1fs", table, before - after, time.monotonic() - started)
+    return removed
+
+
 def validate_counts(connection: psycopg.Connection, expected: dict[str, int]) -> dict[str, int]:
     actual: dict[str, int] = {}
     for key in ("empresas", "estabelecimentos", "socios", "simples"):
@@ -282,6 +337,8 @@ def validate_counts(connection: psycopg.Connection, expected: dict[str, int]) ->
         actual[key] = connection.execute(f"SELECT count(*) FROM {staging}").fetchone()[0]
         assert actual[key] > 0, f"staging vazio para {key}"
         assert actual[key] <= expected[key], f"{key}: {actual[key]} > esperado {expected[key]}"
+        if actual[key] < expected[key] * 0.99:
+            raise AssertionError(f"{key}: perda inesperada de linhas ({actual[key]} de {expected[key]})")
     return actual
 
 
@@ -367,6 +424,21 @@ def derived_small(connection: psycopg.Connection) -> None:
         ON CONFLICT DO NOTHING
         """
     )
+    # Contagens por dimensões de baixa cardinalidade: a listagem usa SUM nesta tabela
+    # em vez de count(*) sobre 73,8M linhas.
+    connection.execute("TRUNCATE estabelecimentos_filtros_stats")
+    connection.execute(
+        """
+        INSERT INTO estabelecimentos_filtros_stats (
+            uf, situacao_codigo, porte_codigo, matriz_filial,
+            optante_simples, optante_mei, total
+        )
+        SELECT uf, situacao_codigo, porte_codigo, identificador_matriz_filial,
+               optante_simples, optante_mei, count(*)
+        FROM estabelecimentos_listagem
+        GROUP BY 1, 2, 3, 4, 5, 6
+        """
+    )
     connection.commit()
 
 
@@ -380,6 +452,7 @@ def run_bulk(
     workers: int = 8,
     limit_rows: int = 0,
     fonte: str = "Receita Federal",
+    reuse_staging: bool = False,
 ) -> dict:
     started = time.monotonic()
     inventory = discover_inventory(bronze_dir, competencia)
@@ -391,59 +464,66 @@ def run_bulk(
     }
     log.info("inventário: %s", json.dumps(expected))
 
-    # 1. staging + lookups
+    # 1. staging + lookups (ou reuso de staging já carregada)
+    reused = False
     with psycopg.connect(dsn) as connection:
-        create_staging(connection)
-        load_lookups(connection, inventory)
+        if reuse_staging and staging_ready(connection, expected):
+            reused = True
+            log.info("reutilizando staging existente (carga completa detectada)")
+        else:
+            create_staging(connection)
+            load_lookups(connection, inventory)
 
-    # 2. tasks por arquivo/row-group (arquivos grandes fatiados p/ paralelismo real)
-    tasks: list[dict] = []
-    for table, paths in (
-        ("empresas", inventory.empresas),
-        ("estabelecimentos", inventory.estabelecimentos),
-        ("socios", inventory.socios),
-        ("simples", [inventory.simples]),
-    ):
-        for path in paths:
-            for row_groups, expected_slice in _slices(path):
-                tasks.append(
-                    {
-                        "table": table,
-                        "path": str(path),
-                        "dsn": dsn,
-                        "competencia": competencia,
-                        "limit_rows": limit_rows,
-                        "row_groups": row_groups,
-                        "expected": expected_slice,
-                    }
-                )
-
-    # maiores fatias primeiro: evita gargalo no fim
-    tasks.sort(key=lambda task: task["expected"], reverse=True)
-
-    # 3. carga paralela
     total_rows = 0
-    errors: list[dict] = []
-    with mp.Pool(processes=workers) as pool:
-        for result in pool.imap_unordered(_load_task, tasks):
-            if "error" in result:
-                errors.append(result)
-                log.error("FALHA %s/%s: %s", result["table"], result["file"], result["error"])
-                continue
-            total_rows += result["rows"]
-            log.info(
-                "ok %-16s %-28s %10d linhas (%d cnaes) %6.1fs",
-                result["table"],
-                result["file"],
-                result["rows"],
-                result.get("cnaes", 0),
-                result["seconds"],
-            )
-    if errors:
-        raise RuntimeError(f"{len(errors)} partição(ões) falharam: {errors[:3]}")
+    if not reused:
+        # 2. tasks por arquivo/row-group (arquivos grandes fatiados p/ paralelismo real)
+        tasks: list[dict] = []
+        for table, paths in (
+            ("empresas", inventory.empresas),
+            ("estabelecimentos", inventory.estabelecimentos),
+            ("socios", inventory.socios),
+            ("simples", [inventory.simples]),
+        ):
+            for path in paths:
+                for row_groups, expected_slice in _slices(path):
+                    tasks.append(
+                        {
+                            "table": table,
+                            "path": str(path),
+                            "dsn": dsn,
+                            "competencia": competencia,
+                            "limit_rows": limit_rows,
+                            "row_groups": row_groups,
+                            "expected": expected_slice,
+                        }
+                    )
 
-    # 4. índices + derivados + validação + swap
+        # maiores fatias primeiro: evita gargalo no fim
+        tasks.sort(key=lambda task: task["expected"], reverse=True)
+
+        # 3. carga paralela
+        errors: list[dict] = []
+        with mp.Pool(processes=workers) as pool:
+            for result in pool.imap_unordered(_load_task, tasks):
+                if "error" in result:
+                    errors.append(result)
+                    log.error("FALHA %s/%s: %s", result["table"], result["file"], result["error"])
+                    continue
+                total_rows += result["rows"]
+                log.info(
+                    "ok %-16s %-28s %10d linhas (%d cnaes) %6.1fs",
+                    result["table"],
+                    result["file"],
+                    result["rows"],
+                    result.get("cnaes", 0),
+                    result["seconds"],
+                )
+        if errors:
+            raise RuntimeError(f"{len(errors)} partição(ões) falharam: {errors[:3]}")
+
+    # 4. dedupe + índices + derivados + validação + swap
     with psycopg.connect(dsn) as connection:
+        duplicates = dedupe_staging(connection)
         build_indexes(connection)
         build_derived(connection)
         counts = validate_counts(connection, expected)
@@ -468,7 +548,9 @@ def run_bulk(
     summary = {
         "competencia": competencia,
         "workers": workers,
+        "reused_staging": reused,
         "linhas_carregadas": total_rows,
+        "duplicatas_removidas": duplicates,
         "esperado": expected,
         "contagens": counts,
         "duracao_segundos": round(time.monotonic() - started, 1),
@@ -510,6 +592,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--competencia", default="2026-10")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--limit-rows", type=int, default=0)
+    parser.add_argument(
+        "--reuse-staging",
+        action="store_true",
+        help="reaproveita staging completa (retomada sem recarregar 223M)",
+    )
     args = parser.parse_args(argv)
     if not args.dsn:
         parser.error("--dsn ou CNPJ_INGEST_SERVING_DSN é obrigatório")
@@ -524,6 +611,7 @@ def main(argv: list[str] | None = None) -> int:
         args.competencia,
         workers=args.workers,
         limit_rows=args.limit_rows,
+        reuse_staging=args.reuse_staging,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

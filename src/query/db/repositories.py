@@ -115,12 +115,61 @@ def _where(filtros: "EstabelecimentoFiltros") -> tuple[str, list[Any]]:
     return "WHERE " + " AND ".join(clauses), params
 
 
+def _stats_where(filtros: "EstabelecimentoFiltros") -> tuple[str, list[Any]]:
+    """WHERE sobre a tabela pré-agregada (dimensões de baixa cardinalidade)."""
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if filtros.uf:
+        clauses.append("uf = %s")
+        params.append(filtros.uf)
+    if filtros.situacao:
+        clauses.append("situacao_codigo = %s")
+        params.append(filtros.situacao)
+    if filtros.porte:
+        clauses.append("porte_codigo = %s")
+        params.append(filtros.porte)
+    if filtros.matriz_filial:
+        clauses.append("matriz_filial = %s")
+        params.append(filtros.matriz_filial)
+    if filtros.simples == "sim":
+        clauses.append("optante_simples = true")
+    elif filtros.simples == "nao":
+        clauses.append("optante_simples = false")
+    if filtros.mei == "sim":
+        clauses.append("optante_mei = true")
+    elif filtros.mei == "nao":
+        clauses.append("optante_mei = false")
+    return ("WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+
+def _stats_eligible(filtros: "EstabelecimentoFiltros") -> bool:
+    """Filtros que a pré-agregação por dimensões cobre (sem texto/município/CNAE/data)."""
+
+    return not any(
+        (
+            filtros.q,
+            filtros.municipio,
+            filtros.cnae,
+            filtros.abertura_de,
+            filtros.abertura_ate,
+        )
+    )
+
+
 def contar_estabelecimentos(
     connection: psycopg.Connection, filtros: "EstabelecimentoFiltros"
 ) -> int:
     if not _has_filters(filtros):
         metadata = active_metadata(connection)
         return int(metadata["total_estabelecimentos"]) if metadata else 0
+    if _stats_eligible(filtros):
+        where, params = _stats_where(filtros)
+        row = connection.execute(
+            f"SELECT COALESCE(sum(total), 0) FROM estabelecimentos_filtros_stats {where}",
+            tuple(params),
+        ).fetchone()
+        return int(row[0])
     where, params = _where(filtros)
     row = connection.execute(
         f"SELECT count(*) FROM estabelecimentos_listagem e {where}", tuple(params)
@@ -180,7 +229,7 @@ def opcoes_filtro(
         connection,
         """
         SELECT DISTINCT uf
-        FROM estabelecimentos_listagem
+        FROM municipios_por_uf
         WHERE uf IS NOT NULL AND uf <> ''
         ORDER BY uf
         """,

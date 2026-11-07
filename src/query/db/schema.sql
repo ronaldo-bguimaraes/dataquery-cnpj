@@ -148,6 +148,18 @@ CREATE TABLE IF NOT EXISTS cnaes_presentes (
     descricao text NOT NULL
 );
 
+-- Contagens pré-agregadas para filtros de baixa cardinalidade (evita count(*) em 73M)
+CREATE TABLE IF NOT EXISTS estabelecimentos_filtros_stats (
+    uf char(2),
+    situacao_codigo char(2),
+    porte_codigo char(2),
+    matriz_filial char(1),
+    optante_simples boolean,
+    optante_mei boolean,
+    total bigint NOT NULL,
+    PRIMARY KEY (uf, situacao_codigo, porte_codigo, matriz_filial, optante_simples, optante_mei)
+);
+
 CREATE TABLE IF NOT EXISTS estabelecimentos_listagem (
     cnpj_completo char(14) PRIMARY KEY,
     cnpj_basico char(8) NOT NULL,
