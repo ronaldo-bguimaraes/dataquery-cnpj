@@ -133,6 +133,26 @@ python -m src.query.benchmark --base-url http://127.0.0.1:8000 --requisicoes 50
 
 Esperado: duração total da carga ≤ 2h com 8 workers; listagem p95 ≤ 5s; detail p95 ≤ 3s.
 
+### Resultado medido — competência `2026-10` (2026-11-06)
+
+Carga completa via `src/ingest_parallel.bulk` (8 processos, Postgres dedicado):
+
+| Etapa | Tempo |
+|---|---|
+| COPY paralelo (223.636.289 linhas; 84 faixas de row-group) | ~48 min |
+| Dedupe business keys (415 duplicatas removidas) | ~25 min |
+| PKs/índices na staging | ~10 min |
+| Listagem derivada (73.809.378 linhas) | ~14 min |
+| Swap atômico + derivados + ANALYZE | ~6 min |
+| **Total (wall clock)** | **~1h43** (SC-012 ≤ 2h ✅) |
+
+Contagens publicadas: `empresas=70.517.437`, `estabelecimentos=73.809.378`,
+`sócios=28.495.547`, `simples=50.806.102`; base 81 GB.
+
+Obs.: caminho de serving em Postgres (bulk), não o writer Iceberg — o catálogo REST
+ainda não está provisionado. No bulk web, detail p95 ficou < 15 ms; a listagem com
+filtro amplo (UF, ~21M resultados) depende de `VACUUM` + índice para ficar na meta.
+
 ---
 
 ## 6. Rejeições e modelo idempotência
