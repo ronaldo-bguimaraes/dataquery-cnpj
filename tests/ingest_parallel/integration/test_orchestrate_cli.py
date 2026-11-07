@@ -48,6 +48,7 @@ class TestRegistroParticao:
         load_id = "2026-10-regs"
         with psycopg.connect(ingest_test_dsn) as conn:
             ensure_run_tables(conn)
+            conn.execute("DELETE FROM silver_partition_registry WHERE load_id = %s", (load_id,))
             conn.commit()
             primeiro = register_partition(conn, load_id, "empresas-0", "hash-ABC")
             conn.commit()

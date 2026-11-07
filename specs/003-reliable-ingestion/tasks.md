@@ -126,18 +126,18 @@
 
 ### Testes (escrever primeiro, ver falhar)
 
-- [ ] T032 [P] [US3] Teste unitário de particionamento em `tests/ingest_parallel/unit/test_partitioning.py`: manifesto 37 arquivos → 64–128 partições lógicas `{table}-{index}` determinísticas (mesmo input → mesma lista), nenhuma linha duplicada/omitida entre partições (FR-018)
-- [ ] T033 [P] [US3] Teste de corrida de competência em `tests/ingest_parallel/integration/test_race_one_publisher.py`: duas execuções simultâneas da mesma competência → apenas 1 publica; a outra rejeitada com `RUN_ALREADY_ACTIVE` (FR-016/017, US3 aceite 4)
-- [ ] T034 [P] [US3] Teste de integração paralela em `tests/ingest_parallel/integration/test_parallel_sample.py`: amostra com 8 tarefas mapeadas → contagens == manifesto, 0 duplicatas, limite de concorrência respeitado (max 8 TIs ativos) (SC-005)
+- [X] T032 [P] [US3] Teste unitário de particionamento em `tests/ingest_parallel/unit/test_partitioning.py`: manifesto 37 arquivos → 64–128 partições lógicas `{table}-{index}` determinísticas (mesmo input → mesma lista), nenhuma linha duplicada/omitida entre partições (FR-018)
+- [X] T033 [P] [US3] Teste de corrida de competência em `tests/ingest_parallel/integration/test_race_one_publisher.py`: duas execuções simultâneas da mesma competência → apenas 1 publica; a outra rejeitada com `RUN_ALREADY_ACTIVE` (FR-016/017, US3 aceite 4)
+- [X] T034 [P] [US3] Teste de integração paralela em `tests/ingest_parallel/integration/test_parallel_sample.py`: amostra com 8 tarefas mapeadas → contagens == manifesto, 0 duplicatas, limite de concorrência respeitado (max 8 TIs ativos) (SC-005)
 
 ### Implementação
 
-- [ ] T035 [US3] Implementar `src/ingest_parallel/partitioning.py`: divide Source Manifest em partições por tabela + faixas de arquivo (tamanho alvo por partição ≈ volume/128), retorna payload JSON serializável para DTM (FR-018, research D7) (depende T012, T032)
-- [ ] T036 Implementar DAG `airflow/dags/cnpj_ingestion.py`: pipeline `inventory → partitions(DTM) → validate_silver → publish_serving`; mapped tasks com `pool="ingest_parallel"`, `max_active_tis_per_dag=8`, `map_index_template="load_{table}_{partition}"`; pool criado em Docker init (`airflow/dags/runbook.md` com comando `airflow pools set ingest_parallel 8`) (FR-023, FR-024) (depende T035)
-- [ ] T037 [US3] Implementar no-op de memória compartilhada: cada mapped task recebe argumentos próprios (partição + manifest), sem variáveis de processo; estado exclusivamente em Postgres/Iceberg (FR-025) (depende T036)
-- [ ] T038 [US3] Implementar guard de concorrência em `src/ingest_parallel/orchestrate.py`: lock por competência (`ingestion_run` unique parcial em `competencia` WHERE status='running'), falha observável em vez de degradar (FR-016, FR-035) (depende T036; valida T033)
-- [ ] T039 [US3] Implementar limites de recursos em `src/ingest_parallel/normalize.py` + `serving.py`: batch cap (linhas/bytes), `statement_timeout` e pool de conexões psycopg máx 8, falha observável ao estourar (FR-034, FR-035, US3 aceite 5) (depende T018, T020)
-- [ ] T040 [US3] Implementar `src/ingest_parallel/benchmark.py`: mede duração/memória pico/linhas/s por etapa e compara 1 worker vs N workers; gera relatório conforme SC-006/SC-012 (depende T036, T039)
+- [X] T035 [US3] Implementar `src/ingest_parallel/partitioning.py`: divide Source Manifest em partições por tabela + faixas de arquivo (tamanho alvo por partição ≈ volume/128), retorna payload JSON serializável para DTM (FR-018, research D7) (depende T012, T032)
+- [X] T036 Implementar DAG `airflow/dags/cnpj_ingestion.py`: pipeline `inventory → partitions(DTM) → validate_silver → publish_serving`; mapped tasks com `pool="ingest_parallel"`, `max_active_tis_per_dag=8`, `map_index_template="load_{table}_{partition}"`; pool criado em Docker init (`airflow/dags/runbook.md` com comando `airflow pools set ingest_parallel 8`) (FR-023, FR-024) (depende T035)
+- [X] T037 [US3] Implementar no-op de memória compartilhada: cada mapped task recebe argumentos próprios (partição + manifest), sem variáveis de processo; estado exclusivamente em Postgres/Iceberg (FR-025) (depende T036)
+- [X] T038 [US3] Implementar guard de concorrência em `src/ingest_parallel/orchestrate.py`: lock por competência (`ingestion_run` unique parcial em `competencia` WHERE status='running'), falha observável em vez de degradar (FR-016, FR-035) (depende T036; valida T033)
+- [X] T039 [US3] Implementar limites de recursos em `src/ingest_parallel/normalize.py` + `serving.py`: batch cap (linhas/bytes), `statement_timeout` e pool de conexões psycopg máx 8, falha observável ao estourar (FR-034, FR-035, US3 aceite 5) (depende T018, T020)
+- [X] T040 [US3] Implementar `src/ingest_parallel/benchmark.py`: mede duração/memória pico/linhas/s por etapa e compara 1 worker vs N workers; gera relatório conforme SC-006/SC-012 (depende T036, T039)
 
 **Checkpoint**: US1+US2+US3 independentes — pipeline paralelo completo na amostra
 

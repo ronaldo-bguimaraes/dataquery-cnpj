@@ -51,6 +51,14 @@ class OrchestrationError(RuntimeError):
     """Estado inconsistente entre lote e dado durável."""
 
 
+class ConcurrencyGuardError(RuntimeError):
+    """Corrida de competência detectada; `code` = RUN_ALREADY_ACTIVE (FR-016/017)."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(f"{code}: {detail}")
+        self.code = code
+
+
 def ensure_partition_record(
     connection: psycopg.Connection,
     load_id: str,
@@ -179,6 +187,73 @@ def mark_partition_failed(
         """,
         (load_id, partition_id),
     )
+
+
+def acquire_competencia_guard(
+    connection: psycopg.Connection,
+    run_id: str,
+    competencia: str,
+) -> None:
+    """Guard de corrida (FR-016/017): índice único parcial em status='running'.
+
+    Levanta `ConcurrencyGuardError("RUN_ALREADY_ACTIVE")` quando outra execução
+    já publica a competência — falha observável em vez de interleaving.
+    """
+
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ingestion_run_running_uniq"
+        " ON ingestion_run (competencia) WHERE status = 'running'"
+    )
+    try:
+        connection.execute(
+            """
+            INSERT INTO ingestion_run (run_id, load_id, competencia, status, error_summary)
+            VALUES (%s, %s, %s, 'running', %s)
+            """,
+            (run_id, run_id, competencia, None),
+        )
+        connection.commit()
+    except psycopg.errors.UniqueViolation:
+        connection.rollback()
+        raise ConcurrencyGuardError("RUN_ALREADY_ACTIVE", f"competência {competencia} já tem execução ativa") from None
+
+
+def release_competencia_guard(connection: psycopg.Connection, run_id: str) -> None:
+    """Fecha a execução ativa, liberando a competência (com o resultado em status)."""
+
+    connection.execute(
+        "UPDATE ingestion_run SET status = 'succeeded' WHERE run_id = %s AND status = 'running'",
+        (run_id,),
+    )
+    connection.commit()
+
+
+def run_parallel(partitions: list[dict], worker, *, max_workers: int = 8, on_error=None) -> dict:  # noqa: ANN001
+    """Executa partições em paralelo respeitando o teto de concorrência (FR-023).
+
+    Sem memória compartilhada entre tarefas (FR-025): cada task recebe seu payload.
+    `on_error(partition_id)` coleta falhas observadas e não interrompe as outras tasks
+    (US3 aceite 3). Retorna contagem de sucesso/erro.
+    """
+
+    import concurrent.futures
+
+    executadas: list[str] = []
+    falhas: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {}
+        for partition in partitions:
+            future = pool.submit(worker, partition)
+            futures[future] = partition["partition_id"]
+        for future, partition_id in futures.items():
+            try:
+                future.result()
+                executadas.append(partition_id)
+            except Exception:
+                falhas.append(partition_id)
+                if on_error is not None:
+                    on_error(partition_id)
+    return {"executadas": executadas, "falhas": falhas}
 
 
 def partitions_status(connection: psycopg.Connection, load_id: str) -> list[dict[str, Any]]:
