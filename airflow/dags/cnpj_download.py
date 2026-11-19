@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from airflow.sdk import DAG, Param, task, task_group
@@ -68,9 +70,28 @@ O backend é escolhido por `CNPJ_STORAGE_BACKEND`:
 A troca de backend não altera a DAG nem as chaves lógicas. No Compose local, apenas
 `.env` na raiz (ignorado pelo git) é necessário.
 
+O scratch local usado no download e na conversão fica em `CNPJ_DOWNLOAD_DIR`
+(default do Compose: `/tmp/cnpj`). Nada persistente é gravado ali: os ZIPs Raw e os
+Parquet Bronze vivem no bucket configurado.
+
 A DAG não agenda execuções (`schedule=None`), não faz catchup e limita a uma
 execução ativa por vez (`max_active_runs=1`).
 """
+
+
+def _scratch_dir() -> str | None:
+    """Return the writable local scratch directory used by the tasks.
+
+    Persistent objects live in the object store; this path only holds the ZIP being
+    downloaded and the Parquet being converted. ``None`` keeps the system default.
+    """
+
+    configured = (os.environ.get("CNPJ_DOWNLOAD_DIR") or "").strip()
+    if not configured:
+        return None
+    path = Path(configured)
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def _get_store():
@@ -140,6 +161,7 @@ def _baixar_raw(
             nome,
             store=store if store is not None else _get_store(),
             client=client,
+            scratch_dir=_scratch_dir(),
         )
         payload = result.to_dict()
     except Exception as exc:  # noqa: BLE001 - isolate per-file failures
@@ -187,6 +209,7 @@ def _converter_bronze(
             nome,
             download["raw_key"],
             store=store if store is not None else _get_store(),
+            scratch_dir=_scratch_dir(),
         )
         payload = result.to_dict()
     except Exception as exc:  # noqa: BLE001 - isolate per-file failures

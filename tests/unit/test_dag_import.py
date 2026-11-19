@@ -366,6 +366,101 @@ def test_dag_module_does_not_instantiate_s3_store_at_import():
     assert "build_store_from_env" in source
 
 
+def test_scratch_dir_creates_configured_directory(monkeypatch, tmp_path):
+    module = load_dag_module()
+    target = tmp_path / "scratch"
+    monkeypatch.setenv("CNPJ_DOWNLOAD_DIR", str(target))
+
+    assert module._scratch_dir() == str(target)
+    assert target.is_dir()
+
+
+def test_scratch_dir_is_optional(monkeypatch):
+    module = load_dag_module()
+    monkeypatch.delenv("CNPJ_DOWNLOAD_DIR", raising=False)
+
+    assert module._scratch_dir() is None
+
+
+def test_baixar_raw_uses_configured_scratch_dir(monkeypatch, tmp_path):
+    module = load_dag_module()
+    scratch = tmp_path / "scratch"
+    monkeypatch.setenv("CNPJ_DOWNLOAD_DIR", str(scratch))
+    captured = {}
+
+    class Result:
+        def to_dict(self):
+            return {
+                "nome": "Cnaes.zip",
+                "raw_key": "raw/2026-02/Cnaes.zip",
+                "status_download": "baixado",
+                "bytes": 1,
+                "duracao_segundos": 0.0,
+                "erro": None,
+            }
+
+    def fake_download(competencia, nome, *, store, client, scratch_dir=None):
+        captured["scratch_dir"] = scratch_dir
+        return Result()
+
+    import src.extracao_rfb.download_raw as download_module
+
+    monkeypatch.setattr(download_module, "download_raw_file", fake_download)
+
+    payload = module._baixar_raw(
+        {"nome": "Cnaes.zip", "competencia": "2026-02"},
+        store=FakeObjectStore(),
+        client=FakeClient(["Cnaes.zip"]),
+    )
+
+    assert payload["status_download"] == "baixado"
+    assert captured["scratch_dir"] == str(scratch)
+
+
+def test_converter_bronze_uses_configured_scratch_dir(monkeypatch, tmp_path):
+    module = load_dag_module()
+    scratch = tmp_path / "scratch"
+    monkeypatch.setenv("CNPJ_DOWNLOAD_DIR", str(scratch))
+    captured = {}
+
+    class Result:
+        def to_dict(self):
+            return {
+                "nome": "Cnaes.zip",
+                "raw_key": "raw/2026-02/Cnaes.zip",
+                "bronze_key": "bronze/2026-02/Cnaes.parquet",
+                "status_conversao": "publicado",
+                "bytes": 1,
+                "linhas": 1,
+                "duracao_segundos": 0.0,
+                "erro": None,
+            }
+
+    def fake_convert(competencia, nome, raw_key, *, store, scratch_dir=None):
+        captured["scratch_dir"] = scratch_dir
+        return Result()
+
+    import src.conversao.bronze as bronze_module
+
+    monkeypatch.setattr(bronze_module, "convert_raw_file", fake_convert)
+
+    payload = module._converter_bronze(
+        {"nome": "Cnaes.zip", "competencia": "2026-02"},
+        {
+            "nome": "Cnaes.zip",
+            "status_download": "reutilizado",
+            "raw_key": "raw/2026-02/Cnaes.zip",
+            "bytes": 0,
+            "duracao_segundos": 0.0,
+            "erro": None,
+        },
+        store=FakeObjectStore(),
+    )
+
+    assert payload["status_conversao"] == "publicado"
+    assert captured["scratch_dir"] == str(scratch)
+
+
 def test_dag_docs_describe_filesystem_and_r2_without_minio_requirement():
     module = load_dag_module()
 
