@@ -201,6 +201,7 @@ Estados possíveis: download `baixado`, `reutilizado` ou `falhou`; conversão
 | `CNPJ_S3_REGION` | `.env` | `us-east-1` | região do cliente S3 |
 | `RUSTFS_API_PORT` | `.env` | `9000` | porta local da API S3 do RustFS |
 | `RUSTFS_CONSOLE_PORT` | `.env` | `9001` | porta local do console RustFS |
+| `CNPJ_DOWNLOAD_DIR` | Compose/tarefa | `/tmp/cnpj` | scratch local do ZIP/Parquet (nada persistente) |
 | `CNPJ_DATA_ROOT` | fora do Compose | `/data` | raiz do backend filesystem (testes/CLI) |
 | `CNPJ_DATA_HOST_DIR` | fora do Compose | `../data` | diretório do host para o backend filesystem |
 | `CNPJ_CODE_HOST_DIR` | host/compose | `..` | código montado em `/opt/dataquery-cnpj` |
