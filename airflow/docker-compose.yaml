@@ -82,18 +82,21 @@ x-airflow-common:
     # Pipeline code is mounted read-only; tests and DAGs import it from PYTHONPATH.
     PYTHONPATH: /opt/dataquery-cnpj
     PYTHONDONTWRITEBYTECODE: '1'
-    CNPJ_DOWNLOAD_DIR: /data/cnpj
-    # Local storage backend: ./data on the host, mounted as /data.
-    CNPJ_STORAGE_BACKEND: ${CNPJ_STORAGE_BACKEND:-filesystem}
-    CNPJ_DATA_ROOT: ${CNPJ_DATA_ROOT:-/data}
+    # Scratch local (ZIP → Parquet); os dados persistentes ficam no RustFS.
+    CNPJ_DOWNLOAD_DIR: /tmp/cnpj
+    # Raw e Bronze ficam no RustFS (S3-compatível), definido no Compose raiz.
+    CNPJ_STORAGE_BACKEND: ${CNPJ_STORAGE_BACKEND:-s3}
+    CNPJ_S3_ENDPOINT: ${CNPJ_S3_ENDPOINT:-http://rustfs:9000}
+    CNPJ_S3_BUCKET: ${CNPJ_S3_BUCKET:-cnpj-data}
+    CNPJ_S3_ACCESS_KEY: ${CNPJ_S3_ACCESS_KEY:-rustfsadmin}
+    CNPJ_S3_SECRET_KEY: ${CNPJ_S3_SECRET_KEY:-rustfsadmin}
+    CNPJ_S3_REGION: ${CNPJ_S3_REGION:-us-east-1}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${CNPJ_CODE_HOST_DIR:-..}:/opt/dataquery-cnpj:ro
-    # Raw and Bronze live here (raw/ and bronze/ logical prefixes).
-    - ${CNPJ_DATA_HOST_DIR:-../data}:/data
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -101,6 +104,9 @@ x-airflow-common:
       condition: service_healthy
     postgres:
       condition: service_healthy
+    # Bucket provisionado antes de qualquer task falar com o RustFS.
+    rustfs-init:
+      condition: service_completed_successfully
 
 services:
   postgres:
@@ -295,15 +301,9 @@ services:
         echo
         chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,dags,plugins,config}
         echo
-        echo "Ensuring data storage directory exists:"
-        echo
-        mkdir -v -p /data
-        chown -v -R "${AIRFLOW_UID:-50000}:0" /data
-        echo
         echo "Files in shared volumes:"
         echo
         ls -la /opt/airflow/{logs,dags,plugins,config}
-        ls -la /data
 
     # yamllint enable rule:line-length
     environment:
@@ -345,8 +345,12 @@ services:
       <<: *airflow-common-env
       # The repository is mounted read-only; keep coverage data writable.
       COVERAGE_FILE: /tmp/.coverage
+      # A suíte padrão usa filesystem temporário; o round-trip RustFS/S3 é opt-in
+      # e sobrescreve estas variáveis na linha de comando (docker compose run -e).
+      CNPJ_STORAGE_BACKEND: filesystem
+      CNPJ_DATA_ROOT: /tmp/cnpj-tests
     # Tests use in-memory fakes and a temporary filesystem backend; S3/R2 tests
-    # skip when no endpoint is configured. MinIO is not required for this suite.
+    # skip when no endpoint is configured. RustFS is not required for this suite.
     depends_on:
       redis:
         condition: service_healthy

@@ -46,6 +46,7 @@ class QueryConfig:
     page_size: int = 25
     data_root: Path = field(default_factory=lambda: Path("/data"))
     storage_backend: str = "filesystem"
+    scratch_dir: Path = field(default_factory=lambda: Path("/tmp/cnpj-query"))
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "competencia", validate_competencia(self.competencia))
@@ -74,4 +75,5 @@ class QueryConfig:
             ),
             data_root=Path(os.getenv("CNPJ_DATA_ROOT", "/data")),
             storage_backend=os.getenv("CNPJ_STORAGE_BACKEND", "filesystem"),
+            scratch_dir=Path(os.getenv("CNPJ_QUERY_SCRATCH_DIR", "/tmp/cnpj-query")),
         )

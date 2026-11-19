@@ -66,14 +66,20 @@ with DAG(
     def manifesto_fonte(**context) -> dict:
         """Constrói o Source Manifest e devolve metadados determinísticos (FR-001)."""
 
+        from pathlib import Path
+
         from src.ingest_parallel.inventory import build_source_manifest
         from src.query.config import validate_competencia
 
         competencia = validate_competencia(context["params"]["competencia"])
-        bronze_dir = os.environ.get(
-            "CNPJ_INGEST_BRONZE_DIR", os.environ.get("CNPJ_DATA_ROOT", "/data/bronze")
-        )
-        manifest = build_source_manifest(f"{bronze_dir.rsplit('/', 1)[0]}/{competencia}", competencia)
+        bronze_root = Path(os.environ.get("CNPJ_INGEST_BRONZE_DIR", "/tmp/cnpj-bronze"))
+        source_dir = bronze_root / competencia
+        # Bronze vive no RustFS; materializa para as tasks seguintes. O download
+        # é idempotente e reutiliza arquivos locais com tamanho compatível.
+        from src.query.ingest.source import download_bronze
+
+        download_bronze(competencia, source_dir)
+        manifest = build_source_manifest(source_dir, competencia)
         log.info(
             "manifesto: competencia=%s load_id=%s arquivos=%s",
             manifest.competencia,

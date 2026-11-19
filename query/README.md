@@ -18,7 +18,8 @@ Parquets Bronze ──query-loader──▶ PostgreSQL ──query-web──▶ 
 
 - Docker + Docker Compose v2;
 - `.env` na raiz, criado a partir de `.env.example`;
-- Parquets Bronze em `data/bronze/2026-10/` (37 arquivos).
+- Parquets Bronze da competência no bucket `cnpj-data` do RustFS, em
+  `bronze/<AAAA-MM>/` (37 arquivos), produzidos pela DAG `cnpj_download_manual`.
 
 ## Subir e carregar
 
@@ -37,11 +38,17 @@ Se a porta 8000 estiver ocupada, use outra porta:
 CNPJ_QUERY_PORT=8003 docker compose --profile query up -d query-web
 ```
 
-Para carregar manualmente fora do Compose:
+Para carregar manualmente fora do Compose, baixe a competência do RustFS e use o
+backend filesystem:
 
 ```shell
+CNPJ_S3_ENDPOINT=http://127.0.0.1:9000 CNPJ_S3_BUCKET=cnpj-data \
+CNPJ_S3_ACCESS_KEY=rustfsadmin CNPJ_S3_SECRET_KEY=rustfsadmin \
+  python -m src.query.ingest.source --competencia 2026-10 --dest data/bronze/2026-10
+
 CNPJ_QUERY_DATABASE_URL=postgresql://cnpj_query_loader:...@127.0.0.1:55432/cnpj_query \
-  python -m src.query.ingest.load --source-dir data/bronze/2026-10 --competencia 2026-10
+CNPJ_STORAGE_BACKEND=filesystem CNPJ_DATA_ROOT="$PWD/data" \
+  python -m src.query.ingest.load --competencia 2026-10
 ```
 
 O loader é idempotente: reexecutar a mesma competência substitui o retrato de forma atômica.
@@ -55,15 +62,17 @@ Falhas fazem rollback e preservam a publicação anterior.
 | `CNPJ_QUERY_SOURCE` | fonte exibida; default `Receita Federal` |
 | `CNPJ_QUERY_PAGE_SIZE` | registros por página; default `25` |
 | `CNPJ_QUERY_DATABASE_URL` | DSN do banco; loader usa escrita, web usa role read-only |
-| `CNPJ_DATA_ROOT` | raiz do storage filesystem no container; default `/data` |
-| `CNPJ_STORAGE_BACKEND` | `filesystem` ou `s3`/`r2` |
-| `CNPJ_S3_*` | credenciais do backend S3/R2, usadas somente pelo loader |
+| `CNPJ_QUERY_SCRATCH_DIR` | diretório temporário para o download do Bronze; default `/tmp/cnpj-query` |
+| `CNPJ_DATA_ROOT` | raiz do storage filesystem (somente backend `filesystem`); default `/data` |
+| `CNPJ_STORAGE_BACKEND` | `s3` (default no Compose, RustFS/R2) ou `filesystem` |
+| `CNPJ_S3_*` | endpoint, bucket e credenciais do backend S3/R2, usados somente pelo loader |
 | `POSTGRES_QUERY_*` | banco/usuário/senha do PostgreSQL do portal |
 | `POSTGRES_QUERY_TEST_DB` | banco isolado usado por `query-tests`; default `cnpj_query_test` |
 | `CNPJ_QUERY_APP_PASSWORD` | senha do papel `cnpj_query_app` (somente leitura) |
 
 A web **não** recebe credenciais de storage; somente a URL do banco com o papel
-`cnpj_query_app`.
+`cnpj_query_app`. O loader baixa os 37 Parquets do bucket para o scratch antes de
+validar o inventário; reserve espaço local equivalente ao Bronze (~8,3 GB).
 
 ## Testes
 

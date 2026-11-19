@@ -5,7 +5,16 @@ Runner paralelo para carregar uma competência inteira (~223,6M linhas) com stag
 
 ## Pré-requisitos
 
-- Bronze completo em `data/bronze/<competencia>/` (37 Parquet, ~8,3 GB)
+- Bronze completo em um diretório local (37 Parquet, ~8,3 GB). No fluxo padrão os
+  arquivos vivem no RustFS; materialize-os antes de rodar o runner:
+
+  ```shell
+  CNPJ_S3_ENDPOINT=http://127.0.0.1:9000 CNPJ_S3_BUCKET=cnpj-data \
+  CNPJ_S3_ACCESS_KEY=rustfsadmin CNPJ_S3_SECRET_KEY=rustfsadmin \
+    python -m src.query.ingest.source \
+    --competencia 2026-10 --dest data/bronze/2026-10
+  ```
+
 - Postgres dedicado com espaço em disco (≈ 45 GB para dados + índices)
 - Python com dependências do projeto (`uv sync`)
 

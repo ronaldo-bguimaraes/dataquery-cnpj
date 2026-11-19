@@ -47,6 +47,16 @@ LOOKUP_FILES = {
     "Qualificacoes": "qualificacoes_socios",
 }
 
+# Nomes canônicos publicados pelo pipeline Bronze. Usado para baixar a
+# competência do storage S3-compatível (RustFS) antes de validar o inventário.
+BRONZE_FILE_NAMES: tuple[str, ...] = (
+    *(f"Empresas{index}.parquet" for index in range(10)),
+    *(f"Estabelecimentos{index}.parquet" for index in range(10)),
+    *(f"Socios{index}.parquet" for index in range(10)),
+    "Simples.parquet",
+    *(f"{nome}.parquet" for nome in LOOKUP_FILES),
+)
+
 
 def _require_columns(path: Path, schema_name: str, count: int | None = None) -> None:
     expected = list(schema[schema_name]["columns"])

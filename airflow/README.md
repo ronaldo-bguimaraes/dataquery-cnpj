@@ -14,8 +14,9 @@ RFB ──baixar_raw──▶ raw/<AAAA-MM>/<nome-original>.zip
 
 O backend é escolhido só por configuração:
 
-- **local (default)**: filesystem em `data/` na raiz do repositório, montado como
-  `/data` nos containers;
+- **Compose (default)**: RustFS em `http://rustfs:9000`, bucket `cnpj-data` criado
+  pelo serviço `rustfs-init`;
+- **offline/testes**: filesystem em `CNPJ_DATA_ROOT`;
 - **produção**: Cloudflare R2 via API compatível com S3.
 
 Download e conversão não conhecem filesystem, bucket nem provedor. Cada ZIP
@@ -31,25 +32,23 @@ sendo executada e substitui o Parquet anterior somente depois da publicação at
 - acesso de rede à RFB para execuções reais.
 
 Execute os comandos a partir da raiz do repositório. O `docker-compose.yaml` raiz
-inclui apenas `airflow/docker-compose.yaml`; **MinIO não é pré-requisito** do caminho
-local.
+inclui `airflow/docker-compose.yaml`, o portal de consulta e o **RustFS**.
 
 ```shell
 cp .env.example .env
-# default local:
-# CNPJ_STORAGE_BACKEND=filesystem
-# CNPJ_DATA_ROOT=/data
+# default: RustFS em http://localhost:9000, bucket cnpj-data
 docker compose build
 docker compose up -d
 docker compose ps
 ```
 
-Os serviços Airflow montam `${CNPJ_DATA_HOST_DIR:-../data}` em `/data`. No host, Raw e
-Bronze aparecem em `data/raw/` e `data/bronze/`. A UI fica em
-<http://localhost:8080> (login local padrão `airflow` / `airflow`).
+O bucket é criado por `rustfs-init` antes das tarefas do Airflow. Não existe mais
+volume de dados local: Raw e Bronze ficam no volume Docker `rustfs-data`. A UI fica
+em <http://localhost:8080> (login local padrão `airflow` / `airflow`) e o console do
+RustFS em <http://localhost:9001>.
 
-> Um endpoint S3-compatível local (por exemplo MinIO) pode ser iniciado à parte, mas
-> não faz parte do caminho feliz nem dos pré-requisitos da suíte.
+> Um endpoint S3-compatível externo (Cloudflare R2) continua suportado; basta trocar
+> `CNPJ_S3_ENDPOINT` e as credenciais no `.env`.
 
 ## DAG `cnpj_download_manual`
 
@@ -97,30 +96,27 @@ docker compose exec airflow-scheduler \
 
 ### Saída
 
-Modo local (`CNPJ_STORAGE_BACKEND=filesystem`):
+Modo Compose (RustFS, default):
 
 ```text
-data/
+s3://cnpj-data/
 ├── raw/2026-02/
 │   └── Cnaes.zip                       # ZIP original preservado
 └── bronze/2026-02/
     └── Cnaes.parquet                   # Parquet com o schema central
 ```
 
-No modo S3/R2, as mesmas chaves lógicas ficam no bucket configurado:
+As mesmas chaves lógicas aparecem no bucket R2 quando `CNPJ_S3_*` aponta para a
+produção e em `CNPJ_DATA_ROOT` quando o backend é `filesystem`.
 
-```text
-s3://<CNPJ_S3_BUCKET>/
-├── raw/<AAAA-MM>/<nome-original>
-└── bronze/<AAAA-MM>/<nome-base>.parquet
-```
-
-Inspeção local no host:
+Inspeção no host:
 
 ```shell
-ls data/raw/2026-02/
-ls data/bronze/2026-02/
+docker compose run --rm --entrypoint sh rustfs-init -c \
+  'mc alias set rustfs http://rustfs:9000 "$CNPJ_S3_ACCESS_KEY" "$CNPJ_S3_SECRET_KEY" >/dev/null && mc ls -r rustfs/cnpj-data/raw/2026-02 && mc ls -r rustfs/cnpj-data/bronze/2026-02'
 ```
+
+Ou pelo console: <http://localhost:9001>.
 
 ### Resumo
 
@@ -197,14 +193,16 @@ Estados possíveis: download `baixado`, `reutilizado` ou `falhou`; conversão
 
 | Variável | Onde | Default | Efeito |
 |---|---|---|---|
-| `CNPJ_STORAGE_BACKEND` | `.env` | `filesystem` | `filesystem` (aliases `local`/`fs`) ou `s3`/`r2` |
-| `CNPJ_DATA_ROOT` | containers | `/data` | raiz do backend filesystem |
-| `CNPJ_DATA_HOST_DIR` | host/compose | `../data` | diretório do host montado em `/data` |
-| `CNPJ_S3_ENDPOINT` | `.env` | — | endpoint S3/R2; só com backend `s3` |
-| `CNPJ_S3_BUCKET` | `.env` | — | bucket privado das camadas Raw/Bronze; só com `s3` |
-| `CNPJ_S3_ACCESS_KEY` | `.env` | — | credencial de acesso; só com `s3` |
-| `CNPJ_S3_SECRET_KEY` | `.env` | — | segredo de acesso; só com `s3` |
+| `CNPJ_STORAGE_BACKEND` | `.env` | `s3` no Compose | `s3` (RustFS/R2) ou `filesystem` (aliases `local`/`fs`) |
+| `CNPJ_S3_ENDPOINT` | `.env` | `http://rustfs:9000` | endpoint S3-compatível |
+| `CNPJ_S3_BUCKET` | `.env` | `cnpj-data` | bucket privado das camadas Raw/Bronze |
+| `CNPJ_S3_ACCESS_KEY` | `.env` | `rustfsadmin` | credencial de acesso (troque fora de localhost) |
+| `CNPJ_S3_SECRET_KEY` | `.env` | `rustfsadmin` | segredo de acesso (troque fora de localhost) |
 | `CNPJ_S3_REGION` | `.env` | `us-east-1` | região do cliente S3 |
+| `RUSTFS_API_PORT` | `.env` | `9000` | porta local da API S3 do RustFS |
+| `RUSTFS_CONSOLE_PORT` | `.env` | `9001` | porta local do console RustFS |
+| `CNPJ_DATA_ROOT` | fora do Compose | `/data` | raiz do backend filesystem (testes/CLI) |
+| `CNPJ_DATA_HOST_DIR` | fora do Compose | `../data` | diretório do host para o backend filesystem |
 | `CNPJ_CODE_HOST_DIR` | host/compose | `..` | código montado em `/opt/dataquery-cnpj` |
 | `AIRFLOW_UID` | `.env` | `50000` | dono dos arquivos montados |
 | `RUN_NETWORK_TESTS` | testes | ausente | habilita o teste real da RFB |
@@ -259,14 +257,17 @@ padrão.
 ### Integração S3/R2 (opt-in)
 
 O round-trip S3 usa o mesmo backend de produção e o bucket reais, sem chamar a RFB.
-Ele só roda quando o backend S3 está explicitamente selecionado e o bucket responde:
+Ele só roda quando o backend S3 está explicitamente selecionado e o bucket responde.
+Com o RustFS do Compose no ar:
 
 ```shell
-CNPJ_STORAGE_BACKEND=s3 \
-CNPJ_S3_ENDPOINT=... CNPJ_S3_BUCKET=... \
-CNPJ_S3_ACCESS_KEY=... CNPJ_S3_SECRET_KEY=... \
-docker compose --profile test run --rm airflow-tests \
-  tests/integration/test_minio_pipeline.py -q
+docker compose --profile test run --rm \
+  -e CNPJ_STORAGE_BACKEND=s3 \
+  -e CNPJ_S3_ENDPOINT=http://rustfs:9000 \
+  -e CNPJ_S3_BUCKET=cnpj-data \
+  -e CNPJ_S3_ACCESS_KEY=rustfsadmin \
+  -e CNPJ_S3_SECRET_KEY=rustfsadmin \
+  airflow-tests tests/integration/test_minio_pipeline.py -q
 ```
 
 Quando `CNPJ_STORAGE_BACKEND` não é `s3`/`r2`, ou o endpoint/bucket não responde, os
@@ -314,14 +315,16 @@ Evidências verificadas por testes automatizados (`tests/unit/test_filesystem_st
   PUT completo ou multipart com `complete`. Testes confirmam que a chave final não
   recebe objeto parcial e que o scratch da task é removido em sucesso e falha.
 
-`data/` contém dados brutos da RFB quando usado localmente, incluindo CPF de sócios, e
-é **gitignored** (`/data/*`, exceto `.gitkeep`). Não publique nem versione esse
-diretório.
+`data/` é apenas um diretório opcional para o backend filesystem (testes/CLI). No
+Compose os dados ficam no volume Docker `rustfs-data`, que pode conter dados brutos da
+RFB, incluindo CPF de sócios. Não publique nem versione esse conteúdo.
 
 ## Estrutura
 
 ```text
 .env.example                # placeholders, sem segredos reais (raiz)
+
+docker-compose.yaml         # RustFS + bucket init + includes
 
 airflow/
 ├── Dockerfile              # estágios base (DAGs) e test (pytest)
@@ -330,13 +333,9 @@ airflow/
 ├── requirements.txt        # boto3 + pyarrow + webdavclient3
 └── requirements-dev.txt    # pytest, pytest-asyncio, pytest-cov
 
-data/                       # backend local (gitignored, mantém .gitkeep)
-├── raw/<AAAA-MM>/
-└── bronze/<AAAA-MM>/
-
 src/storage/
 ├── protocol.py             # ObjectStore/ObjectMetadata
-├── filesystem.py           # backend local
-├── minio.py                # backend S3-compatible (R2/MinIO)
+├── filesystem.py           # backend local (testes/CLI)
+├── minio.py                # backend S3-compatible (RustFS/R2)
 └── factory.py              # seleção por CNPJ_STORAGE_BACKEND
 ```
