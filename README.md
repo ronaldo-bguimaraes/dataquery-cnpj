@@ -218,6 +218,13 @@ em raiz temporária (`tests/integration/test_filesystem_pipeline.py`).
 O portal consome os Parquets Bronze da competência `2026-10` e publica um explorador web
 somente leitura com filtros, contagem, paginação e detalhe de estabelecimento/empresa.
 
+A feature 004 acrescenta a página de **prospecção comercial B2B** (`/prospeccao`): recorte
+por segmento, localização, porte, situação, idade, filiais e presença de contato, com
+indicadores derivados, contagens por segmento/UF e geração de uma lista CSV limitada
+(`/prospeccao.csv`). O CSV é a única exportação do portal e não contém CPF nem dados de
+sócios. A especificação está em
+[`specs/004-prospeccao-comercial-b2b/`](specs/004-prospeccao-comercial-b2b/spec.md).
+
 ```shell
 docker compose --profile query up -d query-db
 docker compose --profile query run --rm query-loader

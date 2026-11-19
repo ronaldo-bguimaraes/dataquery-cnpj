@@ -38,7 +38,8 @@ para preservar a unicidade do par sem transformá-la em PK composta.
 
 Estas tabelas não são entidades de domínio e mantêm a chave natural como PK física:
 
-- `estabelecimentos_listagem` — projeção desnormalizada para listagem;
+- `estabelecimentos_listagem` — projeção desnormalizada para listagem e prospecção;
+- `segmentos`, `segmento_divisoes` — catálogo comercial derivado da divisão CNAE (lookup);
 - `estabelecimentos_filtros_stats` e `estabelecimentos_cnae_uf_stats` — agregados de contagem;
 - `municipios_por_uf`, `cnaes_presentes` — derivados;
 - `stg_*` — staging de carga (efêmero);

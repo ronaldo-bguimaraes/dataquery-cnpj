@@ -128,3 +128,35 @@ td small { display: block; color: var(--suave); font-size: .78rem; }
   border-radius: .35rem;
   color: #5c4b10;
 }
+
+.ajuda { color: var(--suave); font-size: .9rem; margin: .25rem 0 .9rem; }
+.ausente { color: var(--suave); font-style: italic; }
+
+.exportacao {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .6rem 1rem;
+  align-items: center;
+  margin: .4rem 0 1rem;
+}
+.exportacao span { color: var(--suave); font-size: .88rem; }
+.botao {
+  display: inline-block;
+  padding: .5rem .8rem;
+  border-radius: .35rem;
+  background: var(--acento);
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.grupos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.2rem;
+}
+.grupos h2 { font-size: 1rem; margin: .2rem 0 .5rem; }
+.tabela-compacta { min-width: 0; }
+.tabela-compacta th, .tabela-compacta td { padding: .35rem .45rem; }
+.numero { text-align: right; font-variant-numeric: tabular-nums; }

@@ -29,12 +29,14 @@ from pathlib import Path
 import psycopg
 
 from src.query.ingest.inventory import Inventory, discover_inventory
+from src.query.domain.segmentos import divisao_rows, segmento_rows
 from src.query.ingest.postgres import (
     EMPRESA_COLUMNS,
     ESTABELECIMENTO_COLUMNS,
     SIMPLES_COLUMNS,
     SOCIO_COLUMNS,
     _copy_line,
+    apply_schema,
 )
 from src.query.ingest.transform import (
     TransformStats,
@@ -196,9 +198,13 @@ INSERT INTO stg_estabelecimentos_listagem (
     cnpj_completo, cnpj_basico, razao_social, razao_social_normalizada,
     nome_fantasia, situacao_codigo, situacao_descricao, uf,
     municipio_codigo, municipio_descricao, cnae_principal_codigo,
-    cnae_principal_descricao, identificador_matriz_filial,
+    cnae_principal_descricao, cnae_secundaria_texto,
+    identificador_matriz_filial,
     matriz_filial_descricao, data_inicio_atividade, porte_codigo,
-    porte_descricao, optante_simples, optante_mei
+    porte_descricao, optante_simples, optante_mei, cep, ddd_1,
+    telefone_1, correio_eletronico, natureza_juridica_codigo,
+    natureza_juridica_descricao, capital_social, segmento_codigo,
+    segmento_nome, qtd_cnaes, qtd_estabelecimentos, qtd_filiais
 )
 SELECT
     e.cnpj_completo,
@@ -213,13 +219,26 @@ SELECT
     COALESCE(m.descricao, e.municipio_codigo),
     e.cnae_principal,
     COALESCE(c.descricao, e.cnae_principal),
+    e.cnae_secundaria_texto,
     e.identificador_matriz_filial,
     COALESCE(mf.descricao, e.identificador_matriz_filial),
     e.data_inicio_atividade,
     lpad(emp.porte_codigo, 2, '0'),
     COALESCE(p.descricao, emp.porte_codigo),
     COALESCE(s.optante_simples, false),
-    COALESCE(s.optante_mei, false)
+    COALESCE(s.optante_mei, false),
+    e.cep,
+    e.ddd_1,
+    e.telefone_1,
+    e.correio_eletronico,
+    emp.natureza_juridica_codigo,
+    COALESCE(nj.descricao, emp.natureza_juridica_codigo),
+    emp.capital_social,
+    COALESCE(sd.segmento_codigo, 'NAO_CLASSIFICADO'),
+    COALESCE(sg.nome, 'Não classificado'),
+    COALESCE(cc.qtd, 0),
+    COALESCE(ec.qtd_estabelecimentos, 0),
+    COALESCE(ec.qtd_filiais, 0)
 FROM stg_estabelecimentos e
 JOIN stg_empresas emp ON emp.cnpj_basico = e.cnpj_basico
 LEFT JOIN situacoes_cadastrais sc ON sc.codigo = lpad(e.situacao_cadastral, 2, '0')
@@ -228,7 +247,35 @@ LEFT JOIN cnaes c ON c.codigo = e.cnae_principal
 LEFT JOIN matriz_filial mf ON mf.codigo = e.identificador_matriz_filial
 LEFT JOIN portes p ON p.codigo = lpad(emp.porte_codigo, 2, '0')
 LEFT JOIN stg_simples s ON s.cnpj_basico = e.cnpj_basico
+LEFT JOIN naturezas_juridicas nj ON nj.codigo = emp.natureza_juridica_codigo
+LEFT JOIN segmento_divisoes sd ON sd.divisao = left(e.cnae_principal, 2)
+LEFT JOIN segmentos sg ON sg.codigo = sd.segmento_codigo
+LEFT JOIN stg_contagem_cnae cc ON cc.cnpj_completo = e.cnpj_completo
+LEFT JOIN stg_contagem_empresa ec ON ec.cnpj_basico = e.cnpj_basico
 """
+
+
+def load_segmentos(connection: psycopg.Connection) -> None:
+    """Publica o catálogo versionado de segmentos sem interromper leituras.
+
+    Usa upsert em vez de TRUNCATE: durante uma carga massiva a versão publicada
+    continua servindo a página de prospecção.
+    """
+
+    with connection.cursor() as cursor:
+        cursor.executemany(
+            "INSERT INTO segmentos (codigo, nome) VALUES (%s, %s)"
+            " ON CONFLICT (codigo) DO UPDATE SET nome = EXCLUDED.nome",
+            segmento_rows(),
+        )
+        cursor.executemany(
+            "INSERT INTO segmento_divisoes (divisao, segmento_codigo)"
+            " VALUES (%s, %s)"
+            " ON CONFLICT (divisao) DO UPDATE"
+            " SET segmento_codigo = EXCLUDED.segmento_codigo",
+            divisao_rows(),
+        )
+    connection.commit()
 
 
 def build_indexes(connection: psycopg.Connection) -> None:
@@ -272,13 +319,55 @@ def build_indexes(connection: psycopg.Connection) -> None:
 def build_derived(connection: psycopg.Connection) -> None:
     started = time.monotonic()
     log.info("construindo listagem derivada (73M)...")
+    # Agregados por CNPJ raiz e por estabelecimento: calculados uma vez, em
+    # UNLOGGED, para não repetir a agregação linha a linha no INSERT.
+    connection.execute("DROP TABLE IF EXISTS stg_contagem_empresa")
+    connection.execute(
+        """
+        CREATE UNLOGGED TABLE stg_contagem_empresa AS
+        SELECT cnpj_basico,
+               count(*)::int AS qtd_estabelecimentos,
+               count(*) FILTER (
+                   WHERE identificador_matriz_filial = '2'
+               )::int AS qtd_filiais
+        FROM stg_estabelecimentos
+        GROUP BY cnpj_basico
+        """
+    )
+    connection.execute(
+        "ALTER TABLE stg_contagem_empresa ADD PRIMARY KEY (cnpj_basico)"
+    )
+    connection.execute("DROP TABLE IF EXISTS stg_contagem_cnae")
+    connection.execute(
+        """
+        CREATE UNLOGGED TABLE stg_contagem_cnae AS
+        SELECT cnpj_completo, count(*)::int AS qtd
+        FROM stg_estabelecimento_cnaes
+        GROUP BY cnpj_completo
+        """
+    )
+    connection.execute(
+        "ALTER TABLE stg_contagem_cnae ADD PRIMARY KEY (cnpj_completo)"
+    )
+    connection.commit()
     connection.execute(DERIVED_LISTAGEM_SQL)
     connection.commit()
+    connection.execute("DROP TABLE IF EXISTS stg_contagem_empresa")
+    connection.execute("DROP TABLE IF EXISTS stg_contagem_cnae")
     connection.execute(
         f"ALTER TABLE {STG['estabelecimentos_listagem']} ADD PRIMARY KEY (cnpj_completo)"
     )
     connection.commit()
-    for column in ("uf, municipio_codigo", "situacao_codigo", "porte_codigo", "data_inicio_atividade", "cnpj_basico"):
+    for column in (
+        "uf, municipio_codigo",
+        "situacao_codigo",
+        "porte_codigo",
+        "data_inicio_atividade",
+        "cnpj_basico",
+        "segmento_codigo",
+        "segmento_codigo, uf",
+        "qtd_filiais",
+    ):
         connection.execute(
             f"CREATE INDEX ON {STG['estabelecimentos_listagem']} ({column})"
         )
@@ -457,13 +546,13 @@ def derived_small(connection: psycopg.Connection) -> None:
     connection.execute(
         """
         INSERT INTO estabelecimentos_filtros_stats (
-            uf, situacao_codigo, porte_codigo, matriz_filial,
+            segmento_codigo, uf, situacao_codigo, porte_codigo, matriz_filial,
             optante_simples, optante_mei, total
         )
-        SELECT uf, situacao_codigo, porte_codigo, identificador_matriz_filial,
-               optante_simples, optante_mei, count(*)
+        SELECT segmento_codigo, uf, situacao_codigo, porte_codigo,
+               identificador_matriz_filial, optante_simples, optante_mei, count(*)
         FROM estabelecimentos_listagem
-        GROUP BY 1, 2, 3, 4, 5, 6
+        GROUP BY 1, 2, 3, 4, 5, 6, 7
         """
     )
     # Contagens por CNAE × UF (CNAE sozinho tem ~1M de linhas por código)
@@ -506,6 +595,7 @@ def run_bulk(
     # 1. staging + lookups (ou reuso de staging já carregada)
     reused = False
     with psycopg.connect(dsn) as connection:
+        apply_schema(connection)
         if reuse_staging and staging_ready(connection, expected):
             reused = True
             log.info("reutilizando staging existente (carga completa detectada)")
@@ -564,6 +654,7 @@ def run_bulk(
     with psycopg.connect(dsn) as connection:
         duplicates = dedupe_staging(connection)
         build_indexes(connection)
+        load_segmentos(connection)
         build_derived(connection)
         counts = validate_counts(connection, expected)
         log.info("contagens: %s", counts)
