@@ -39,7 +39,9 @@ def active_metadata(connection: psycopg.Connection) -> dict[str, Any] | None:
 
 
 from datetime import date  # noqa: E402
-from typing import TYPE_CHECKING  # noqa: E402
+from typing import TYPE_CHECKING, Iterator  # noqa: E402
+
+from src.query.domain.indicadores import limites_idade  # noqa: E402
 
 if TYPE_CHECKING:
     from src.query.web.filters import EstabelecimentoFiltros
@@ -62,6 +64,12 @@ def _has_filters(filtros: "EstabelecimentoFiltros") -> bool:
             filtros.abertura_ate,
             filtros.simples != "qualquer",
             filtros.mei != "qualquer",
+            filtros.segmento,
+            filtros.idade_min is not None,
+            filtros.idade_max is not None,
+            filtros.filiais_min is not None,
+            filtros.filiais_max is not None,
+            filtros.com_contato != "qualquer",
         ]
     )
 
@@ -113,6 +121,34 @@ def _where(filtros: "EstabelecimentoFiltros") -> tuple[str, list[Any]]:
         clauses.append("e.optante_mei = true")
     elif filtros.mei == "nao":
         clauses.append("e.optante_mei = false")
+    if filtros.segmento:
+        clauses.append("e.segmento_codigo = %s")
+        params.append(filtros.segmento)
+    if filtros.com_contato == "sim":
+        clauses.append(
+            "((COALESCE(e.ddd_1, '') <> '' AND COALESCE(e.telefone_1, '') <> '')"
+            " OR COALESCE(e.correio_eletronico, '') <> '')"
+        )
+    elif filtros.com_contato == "nao":
+        clauses.append(
+            "NOT ((COALESCE(e.ddd_1, '') <> '' AND COALESCE(e.telefone_1, '') <> '')"
+            " OR COALESCE(e.correio_eletronico, '') <> '')"
+        )
+    if filtros.filiais_min is not None:
+        clauses.append("e.qtd_filiais >= %s")
+        params.append(filtros.filiais_min)
+    if filtros.filiais_max is not None:
+        clauses.append("e.qtd_filiais <= %s")
+        params.append(filtros.filiais_max)
+    idade_de, idade_ate = limites_idade(
+        filtros.referencia, filtros.idade_min, filtros.idade_max
+    )
+    if idade_de is not None:
+        clauses.append("e.data_inicio_atividade >= %s")
+        params.append(idade_de)
+    if idade_ate is not None:
+        clauses.append("e.data_inicio_atividade <= %s")
+        params.append(idade_ate)
 
     if not clauses:
         return "", []
@@ -124,6 +160,9 @@ def _stats_where(filtros: "EstabelecimentoFiltros") -> tuple[str, list[Any]]:
 
     clauses: list[str] = []
     params: list[Any] = []
+    if filtros.segmento:
+        clauses.append("segmento_codigo = %s")
+        params.append(filtros.segmento)
     if filtros.uf:
         clauses.append("uf = %s")
         params.append(filtros.uf)
@@ -157,6 +196,11 @@ def _stats_eligible(filtros: "EstabelecimentoFiltros") -> bool:
             filtros.cnae,
             filtros.abertura_de,
             filtros.abertura_ate,
+            filtros.idade_min is not None,
+            filtros.idade_max is not None,
+            filtros.filiais_min is not None,
+            filtros.filiais_max is not None,
+            filtros.com_contato != "qualquer",
         )
     )
 
@@ -174,7 +218,23 @@ def _cnae_stats_eligible(filtros: "EstabelecimentoFiltros") -> bool:
         and not filtros.matriz_filial
         and filtros.simples == "qualquer"
         and filtros.mei == "qualquer"
+        and not filtros.segmento
+        and filtros.idade_min is None
+        and filtros.idade_max is None
+        and filtros.filiais_min is None
+        and filtros.filiais_max is None
+        and filtros.com_contato == "qualquer"
     )
+
+
+def _stats_ready(connection: psycopg.Connection, table: str) -> bool:
+    """Whether a pre-aggregation table has been published.
+
+    After a schema migration but before a reload the table can be empty; in that
+    case the safe path is the regular (capped) count, not a misleading zero.
+    """
+
+    return connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None
 
 
 def contar_estabelecimentos(
@@ -183,7 +243,11 @@ def contar_estabelecimentos(
     if not _has_filters(filtros):
         metadata = active_metadata(connection)
         return int(metadata["total_estabelecimentos"]) if metadata else 0
-    if filtros.cnae and _cnae_stats_eligible(filtros):
+    if (
+        filtros.cnae
+        and _cnae_stats_eligible(filtros)
+        and _stats_ready(connection, "estabelecimentos_cnae_uf_stats")
+    ):
         clauses = ["cnae_codigo = %s"]
         params: list[Any] = [filtros.cnae]
         if filtros.uf:
@@ -195,7 +259,9 @@ def contar_estabelecimentos(
             tuple(params),
         ).fetchone()
         return int(row[0])
-    if _stats_eligible(filtros):
+    if _stats_eligible(filtros) and _stats_ready(
+        connection, "estabelecimentos_filtros_stats"
+    ):
         where, params = _stats_where(filtros)
         row = connection.execute(
             f"SELECT COALESCE(sum(total), 0) FROM estabelecimentos_filtros_stats {where}",
@@ -223,15 +289,28 @@ LISTING_COLUMNS = """    e.cnpj_completo,
     e.uf,
     e.municipio_codigo,
     e.municipio_descricao,
+    e.cep,
     e.cnae_principal_codigo,
     e.cnae_principal_descricao,
+    e.cnae_secundaria_texto,
     e.identificador_matriz_filial,
     e.matriz_filial_descricao,
     e.data_inicio_atividade,
     e.porte_codigo,
     e.porte_descricao,
     e.optante_simples,
-    e.optante_mei
+    e.optante_mei,
+    e.ddd_1,
+    e.telefone_1,
+    e.correio_eletronico,
+    e.natureza_juridica_codigo,
+    e.natureza_juridica_descricao,
+    e.capital_social,
+    e.segmento_codigo,
+    e.segmento_nome,
+    e.qtd_cnaes,
+    e.qtd_estabelecimentos,
+    e.qtd_filiais
 """
 
 
@@ -256,6 +335,118 @@ def listar_estabelecimentos(
         tuple(params + [page_size, offset]),
     )
     return rows, total
+
+
+def listar_prospeccao(
+    connection: psycopg.Connection,
+    filtros: "EstabelecimentoFiltros",
+    *,
+    page_size: int = 25,
+) -> tuple[list[dict[str, Any]], int]:
+    """Listing with the prospecting columns (contacts, indicators, segment)."""
+
+    return listar_estabelecimentos(connection, filtros, page_size=page_size)
+
+
+def agrupar_prospeccao(
+    connection: psycopg.Connection,
+    filtros: "EstabelecimentoFiltros",
+) -> dict[str, list[dict[str, Any]]]:
+    """Count the current slice by commercial segment and by UF."""
+
+    if _stats_eligible(filtros) and _stats_ready(
+        connection, "estabelecimentos_filtros_stats"
+    ):
+        where, params = _stats_where(filtros)
+        segmentos = fetch_all(
+            connection,
+            f"""
+            SELECT f.segmento_codigo AS codigo,
+                   COALESCE(s.nome, 'Não classificado') AS rotulo,
+                   sum(f.total)::bigint AS total
+            FROM estabelecimentos_filtros_stats f
+            LEFT JOIN segmentos s ON s.codigo = f.segmento_codigo
+            {where}
+            GROUP BY 1, 2
+            ORDER BY 3 DESC, 2
+            """,
+            tuple(params),
+        )
+        uf_where = where + (" AND " if where else "WHERE ") + "COALESCE(f.uf, '') <> ''"
+        ufs = fetch_all(
+            connection,
+            f"""
+            SELECT f.uf AS codigo, f.uf AS rotulo, sum(f.total)::bigint AS total
+            FROM estabelecimentos_filtros_stats f
+            {uf_where}
+            GROUP BY 1, 2
+            ORDER BY 3 DESC, 1
+            """,
+            tuple(params),
+        )
+        return {"segmentos": segmentos, "ufs": ufs}
+
+    where, params = _where(filtros)
+    segmentos = fetch_all(
+        connection,
+        f"""
+        SELECT e.segmento_codigo AS codigo,
+               COALESCE(e.segmento_nome, 'Não classificado') AS rotulo,
+               count(*)::bigint AS total
+        FROM estabelecimentos_listagem e
+        {where}
+        GROUP BY 1, 2
+        ORDER BY 3 DESC, 2
+        """,
+        tuple(params),
+    )
+    uf_where = where + (" AND " if where else "WHERE ") + "COALESCE(e.uf, '') <> ''"
+    ufs = fetch_all(
+        connection,
+        f"""
+        SELECT e.uf AS codigo, e.uf AS rotulo, count(*)::bigint AS total
+        FROM estabelecimentos_listagem e
+        {uf_where}
+        GROUP BY 1, 2
+        ORDER BY 3 DESC, 1
+        """,
+        tuple(params),
+    )
+    return {"segmentos": segmentos, "ufs": ufs}
+
+
+def iterar_prospeccao(
+    connection: psycopg.Connection,
+    filtros: "EstabelecimentoFiltros",
+    *,
+    limit: int,
+    batch_size: int = 1000,
+) -> Iterator[dict[str, Any]]:
+    """Iterate the filtered slice using a server-side cursor.
+
+    The caller MUST be inside a transaction; no more than ``limit`` rows are
+    fetched, so the export stays bounded even on a 73M-row read model.
+    """
+
+    where, params = _where(filtros)
+    with connection.cursor(
+        name="prospeccao_export", row_factory=dict_row
+    ) as cursor:
+        cursor.execute(
+            f"""
+            SELECT {LISTING_COLUMNS}
+            FROM estabelecimentos_listagem e
+            {where}
+            ORDER BY e.cnpj_completo
+            LIMIT %s
+            """,
+            tuple(params + [limit]),
+        )
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
+            yield from rows
 
 
 def opcoes_filtro(
@@ -301,6 +492,10 @@ def opcoes_filtro(
         "matriz_filial": fetch_all(
             connection,
             "SELECT codigo, descricao FROM matriz_filial ORDER BY codigo",
+        ),
+        "segmentos": fetch_all(
+            connection,
+            "SELECT codigo, nome AS descricao FROM segmentos ORDER BY nome",
         ),
     }
 

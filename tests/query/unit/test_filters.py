@@ -86,3 +86,90 @@ def test_page_and_repeated_parameter():
 def test_short_name_is_rejected():
     with pytest.raises(FilterError):
         parse_filters({"q": "ab"})
+
+
+def test_prospeccao_filters_are_parsed():
+    filtros = parse_filters(
+        {
+            "segmento": "varejo",
+            "idade_min": "2",
+            "idade_max": "10",
+            "filiais_min": "0",
+            "filiais_max": "5",
+            "com_contato": "SIM",
+        },
+        referencia=date(2026, 10, 31),
+    )
+    assert filtros.segmento == "VAREJO"
+    assert filtros.idade_min == 2
+    assert filtros.idade_max == 10
+    assert filtros.filiais_min == 0
+    assert filtros.filiais_max == 5
+    assert filtros.com_contato == "sim"
+    assert filtros.referencia == date(2026, 10, 31)
+
+
+def test_prospeccao_defaults():
+    filtros = parse_filters({}, referencia=date(2026, 10, 31))
+    assert filtros.segmento is None
+    assert filtros.idade_min is None
+    assert filtros.idade_max is None
+    assert filtros.filiais_min is None
+    assert filtros.filiais_max is None
+    assert filtros.com_contato == "qualquer"
+    assert filtros.referencia == date(2026, 10, 31)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"segmento": "INEXISTENTE"},
+        {"idade_min": "-1"},
+        {"idade_max": "201"},
+        {"idade_min": "abc"},
+        {"filiais_min": "-1"},
+        {"filiais_max": "10001"},
+        {"com_contato": "talvez"},
+        {"idade_min": "10", "idade_max": "5"},
+        {"filiais_min": "5", "filiais_max": "2"},
+    ],
+)
+def test_prospeccao_invalid_values_are_rejected(params):
+    with pytest.raises(FilterError):
+        parse_filters(params)
+
+
+def test_prospeccao_query_params_roundtrip():
+    filtros = parse_filters(
+        {
+            "segmento": "ATACADO",
+            "idade_min": "1",
+            "idade_max": "9",
+            "filiais_min": "2",
+            "filiais_max": "8",
+            "com_contato": "nao",
+        }
+    )
+    params = filtros.as_query_params()
+    assert params == {
+        "segmento": "ATACADO",
+        "idade_min": "1",
+        "idade_max": "9",
+        "filiais_min": "2",
+        "filiais_max": "8",
+        "com_contato": "nao",
+    }
+
+
+def test_prospeccao_repeated_new_parameter_is_rejected():
+    with pytest.raises(FilterError):
+        parse_filters([("segmento", "VAREJO"), ("segmento", "ATACADO")])
+
+
+def test_explicit_all_situations_roundtrips():
+    filtros = parse_filters({"situacao": ""})
+    assert filtros.situacao == ""
+    assert filtros.as_query_params() == {"situacao": ""}
+    # Ausente continua diferente de "todas".
+    assert parse_filters({}).situacao is None
+    assert parse_filters({}).as_query_params() == {}

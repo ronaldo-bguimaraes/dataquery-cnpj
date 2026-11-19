@@ -12,6 +12,7 @@ from typing import Any, Iterable, Iterator
 import psycopg
 
 from src.query.config import validate_competencia
+from src.query.domain.segmentos import divisao_rows, segmento_rows
 from src.query.ingest.inventory import Inventory, discover_inventory
 from src.query.ingest.transform import (
     TransformStats,
@@ -197,11 +198,15 @@ def _truncate(connection: psycopg.Connection) -> None:
         """
         TRUNCATE TABLE
             estabelecimentos_listagem,
+            estabelecimentos_filtros_stats,
+            estabelecimentos_cnae_uf_stats,
             estabelecimento_cnaes,
             socios,
             simples,
             estabelecimentos,
             empresas,
+            segmento_divisoes,
+            segmentos,
             municipios_por_uf,
             cnaes_presentes,
             query_metadata,
@@ -216,7 +221,22 @@ def _truncate(connection: psycopg.Connection) -> None:
     )
 
 
+def _seed_segmentos(connection: psycopg.Connection) -> None:
+    """Publish the versioned commercial segment catalogue."""
+
+    with connection.cursor() as cursor:
+        with cursor.copy("COPY segmentos (codigo, nome) FROM STDIN") as copy:
+            for codigo, nome in segmento_rows():
+                copy.write(_copy_line([codigo, nome]))
+        with cursor.copy(
+            "COPY segmento_divisoes (divisao, segmento_codigo) FROM STDIN"
+        ) as copy:
+            for divisao, segmento_codigo in divisao_rows():
+                copy.write(_copy_line([divisao, segmento_codigo]))
+
+
 def _build_derived(connection: psycopg.Connection, competencia: str, fonte: str, counts: dict[str, int]) -> None:
+    _seed_segmentos(connection)
     connection.execute(
         """
         INSERT INTO municipios_por_uf (uf, municipio_codigo, municipio_descricao)
@@ -242,13 +262,31 @@ def _build_derived(connection: psycopg.Connection, competencia: str, fonte: str,
     )
     connection.execute(
         """
+        WITH cnae_counts AS (
+            SELECT cnpj_completo, count(*)::int AS qtd
+            FROM estabelecimento_cnaes
+            GROUP BY cnpj_completo
+        ),
+        empresa_counts AS (
+            SELECT cnpj_basico,
+                   count(*)::int AS qtd_estabelecimentos,
+                   count(*) FILTER (
+                       WHERE identificador_matriz_filial = '2'
+                   )::int AS qtd_filiais
+            FROM estabelecimentos
+            GROUP BY cnpj_basico
+        )
         INSERT INTO estabelecimentos_listagem (
             cnpj_completo, cnpj_basico, razao_social, razao_social_normalizada,
             nome_fantasia, situacao_codigo, situacao_descricao, uf,
             municipio_codigo, municipio_descricao, cnae_principal_codigo,
-            cnae_principal_descricao, identificador_matriz_filial,
+            cnae_principal_descricao, cnae_secundaria_texto,
+            identificador_matriz_filial,
             matriz_filial_descricao, data_inicio_atividade, porte_codigo,
-            porte_descricao, optante_simples, optante_mei
+            porte_descricao, optante_simples, optante_mei, cep, ddd_1,
+            telefone_1, correio_eletronico, natureza_juridica_codigo,
+            natureza_juridica_descricao, capital_social, segmento_codigo,
+            segmento_nome, qtd_cnaes, qtd_estabelecimentos, qtd_filiais
         )
         SELECT
             e.cnpj_completo,
@@ -263,13 +301,26 @@ def _build_derived(connection: psycopg.Connection, competencia: str, fonte: str,
             COALESCE(m.descricao, e.municipio_codigo),
             e.cnae_principal,
             COALESCE(c.descricao, e.cnae_principal),
+            e.cnae_secundaria_texto,
             e.identificador_matriz_filial,
             COALESCE(mf.descricao, e.identificador_matriz_filial),
             e.data_inicio_atividade,
             lpad(emp.porte_codigo, 2, '0'),
             COALESCE(p.descricao, emp.porte_codigo),
             COALESCE(s.optante_simples, false),
-            COALESCE(s.optante_mei, false)
+            COALESCE(s.optante_mei, false),
+            e.cep,
+            e.ddd_1,
+            e.telefone_1,
+            e.correio_eletronico,
+            emp.natureza_juridica_codigo,
+            COALESCE(nj.descricao, emp.natureza_juridica_codigo),
+            emp.capital_social,
+            COALESCE(sd.segmento_codigo, 'NAO_CLASSIFICADO'),
+            COALESCE(sg.nome, 'Não classificado'),
+            COALESCE(cc.qtd, 0),
+            COALESCE(ec.qtd_estabelecimentos, 0),
+            COALESCE(ec.qtd_filiais, 0)
         FROM estabelecimentos e
         JOIN empresas emp ON emp.cnpj_basico = e.cnpj_basico
         LEFT JOIN situacoes_cadastrais sc ON sc.codigo = lpad(e.situacao_cadastral, 2, '0')
@@ -278,6 +329,35 @@ def _build_derived(connection: psycopg.Connection, competencia: str, fonte: str,
         LEFT JOIN matriz_filial mf ON mf.codigo = e.identificador_matriz_filial
         LEFT JOIN portes p ON p.codigo = lpad(emp.porte_codigo, 2, '0')
         LEFT JOIN simples s ON s.cnpj_basico = e.cnpj_basico
+        LEFT JOIN naturezas_juridicas nj
+            ON nj.codigo = emp.natureza_juridica_codigo
+        LEFT JOIN segmento_divisoes sd
+            ON sd.divisao = left(e.cnae_principal, 2)
+        LEFT JOIN segmentos sg ON sg.codigo = sd.segmento_codigo
+        LEFT JOIN cnae_counts cc ON cc.cnpj_completo = e.cnpj_completo
+        LEFT JOIN empresa_counts ec ON ec.cnpj_basico = e.cnpj_basico
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO estabelecimentos_filtros_stats (
+            segmento_codigo, uf, situacao_codigo, porte_codigo, matriz_filial,
+            optante_simples, optante_mei, total
+        )
+        SELECT segmento_codigo, uf, situacao_codigo, porte_codigo,
+               identificador_matriz_filial, optante_simples, optante_mei, count(*)
+        FROM estabelecimentos_listagem
+        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO estabelecimentos_cnae_uf_stats (cnae_codigo, uf, total)
+        SELECT ec.cnae_codigo, e.uf, count(*)
+        FROM estabelecimento_cnaes ec
+        JOIN estabelecimentos_listagem e USING (cnpj_completo)
+        WHERE e.uf IS NOT NULL AND e.uf <> ''
+        GROUP BY 1, 2
         """
     )
     connection.execute(
@@ -400,7 +480,9 @@ def load_inventory(
                 connection.execute(
                     "ANALYZE empresas; ANALYZE estabelecimentos; "
                     "ANALYZE estabelecimento_cnaes; ANALYZE socios; "
-                    "ANALYZE simples; ANALYZE estabelecimentos_listagem"
+                    "ANALYZE simples; ANALYZE estabelecimentos_listagem; "
+                    "ANALYZE estabelecimentos_filtros_stats; "
+                    "ANALYZE estabelecimentos_cnae_uf_stats"
                 )
                 connection.commit()
             except Exception as exc:

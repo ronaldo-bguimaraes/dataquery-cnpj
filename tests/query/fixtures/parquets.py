@@ -123,6 +123,9 @@ def estabelecimentos_rows() -> list[dict[str, str]]:
             "estabelecimento_cnae_fiscal_secundaria": "",
             "estabelecimento_uf": "RJ",
             "estabelecimento_municipio": "6001",
+            "estabelecimento_ddd_1": "",
+            "estabelecimento_telefone_1": "",
+            "estabelecimento_correio_eletronico": "",
         },
         {
             **base,
@@ -151,7 +154,7 @@ def estabelecimentos_rows() -> list[dict[str, str]]:
             "estabelecimento_data_situacao_cadastral": "20240101",
             "estabelecimento_motivo_situacao_cadastral": "00",
             "estabelecimento_data_inicio_atividade": "20240101",
-            "estabelecimento_cnae_fiscal_principal": "1111301",
+            "estabelecimento_cnae_fiscal_principal": "4711301",
             "estabelecimento_cnae_fiscal_secundaria": "",
             "estabelecimento_uf": "MG",
             "estabelecimento_municipio": "4123",
@@ -219,6 +222,7 @@ def lookup_rows() -> dict[str, list[dict[str, str]]]:
             {"cnae_codigo": "1111301", "cnae_descricao": "Cultivo de arroz"},
             {"cnae_codigo": "2222201", "cnae_descricao": "Fabricação de exemplo"},
             {"cnae_codigo": "3333301", "cnae_descricao": "Comércio de exemplo"},
+            {"cnae_codigo": "4711301", "cnae_descricao": "Comércio varejista de exemplo"},
         ],
         "Motivos": [
             {"motivo_codigo": "00", "motivo_descricao": "SEM MOTIVO"},

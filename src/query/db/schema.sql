@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS cnaes_presentes (
 
 -- Contagens pré-agregadas para filtros de baixa cardinalidade (evita count(*) em 73M)
 CREATE TABLE IF NOT EXISTS estabelecimentos_filtros_stats (
+    segmento_codigo text NOT NULL DEFAULT 'NAO_CLASSIFICADO',
     uf char(2),
     situacao_codigo char(2),
     porte_codigo char(2),
@@ -170,8 +171,22 @@ CREATE TABLE IF NOT EXISTS estabelecimentos_filtros_stats (
     optante_simples boolean,
     optante_mei boolean,
     total bigint NOT NULL,
-    PRIMARY KEY (uf, situacao_codigo, porte_codigo, matriz_filial, optante_simples, optante_mei)
+    PRIMARY KEY (
+        segmento_codigo, uf, situacao_codigo, porte_codigo,
+        matriz_filial, optante_simples, optante_mei
+    )
 );
+
+-- Migração idempotente do cubo de contagens (feature 004 acrescentou segmento).
+ALTER TABLE estabelecimentos_filtros_stats
+    ADD COLUMN IF NOT EXISTS segmento_codigo text NOT NULL DEFAULT 'NAO_CLASSIFICADO';
+ALTER TABLE estabelecimentos_filtros_stats
+    DROP CONSTRAINT IF EXISTS estabelecimentos_filtros_stats_pkey;
+ALTER TABLE estabelecimentos_filtros_stats
+    ADD PRIMARY KEY (
+        segmento_codigo, uf, situacao_codigo, porte_codigo,
+        matriz_filial, optante_simples, optante_mei
+    );
 
 -- Contagens por CNAE × UF (evita nested loop de 1M+ linhas para count)
 CREATE TABLE IF NOT EXISTS estabelecimentos_cnae_uf_stats (
@@ -179,6 +194,17 @@ CREATE TABLE IF NOT EXISTS estabelecimentos_cnae_uf_stats (
     uf char(2) NOT NULL,
     total bigint NOT NULL,
     PRIMARY KEY (cnae_codigo, uf)
+);
+
+-- Catálogo comercial de segmentos (decisão de produto versionada em código).
+CREATE TABLE IF NOT EXISTS segmentos (
+    codigo text PRIMARY KEY,
+    nome text NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS segmento_divisoes (
+    divisao char(2) PRIMARY KEY,
+    segmento_codigo text NOT NULL REFERENCES segmentos(codigo)
 );
 
 CREATE TABLE IF NOT EXISTS estabelecimentos_listagem (
@@ -194,14 +220,42 @@ CREATE TABLE IF NOT EXISTS estabelecimentos_listagem (
     municipio_descricao text,
     cnae_principal_codigo char(7),
     cnae_principal_descricao text,
+    cnae_secundaria_texto text,
     identificador_matriz_filial char(1),
     matriz_filial_descricao text,
     data_inicio_atividade date,
     porte_codigo char(2),
     porte_descricao text,
     optante_simples boolean NOT NULL DEFAULT false,
-    optante_mei boolean NOT NULL DEFAULT false
+    optante_mei boolean NOT NULL DEFAULT false,
+    cep char(8),
+    ddd_1 text,
+    telefone_1 text,
+    correio_eletronico text,
+    natureza_juridica_codigo text,
+    natureza_juridica_descricao text,
+    capital_social numeric(18, 2),
+    segmento_codigo text,
+    segmento_nome text,
+    qtd_cnaes integer NOT NULL DEFAULT 0,
+    qtd_estabelecimentos integer NOT NULL DEFAULT 0,
+    qtd_filiais integer NOT NULL DEFAULT 0
 );
+
+-- Migração idempotente para bancos criados antes da feature 004.
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS cep char(8);
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS ddd_1 text;
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS telefone_1 text;
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS correio_eletronico text;
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS cnae_secundaria_texto text;
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS natureza_juridica_codigo text;
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS natureza_juridica_descricao text;
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS capital_social numeric(18, 2);
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS segmento_codigo text;
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS segmento_nome text;
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS qtd_cnaes integer NOT NULL DEFAULT 0;
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS qtd_estabelecimentos integer NOT NULL DEFAULT 0;
+ALTER TABLE estabelecimentos_listagem ADD COLUMN IF NOT EXISTS qtd_filiais integer NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_estab_list_uf_municipio
     ON estabelecimentos_listagem (uf, municipio_codigo);
@@ -215,6 +269,12 @@ CREATE INDEX IF NOT EXISTS idx_estab_list_cnpj_basico
     ON estabelecimentos_listagem (cnpj_basico);
 CREATE INDEX IF NOT EXISTS idx_estab_list_razao_trgm
     ON estabelecimentos_listagem USING gin (razao_social_normalizada gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_estab_list_segmento
+    ON estabelecimentos_listagem (segmento_codigo);
+CREATE INDEX IF NOT EXISTS idx_estab_list_segmento_uf
+    ON estabelecimentos_listagem (segmento_codigo, uf);
+CREATE INDEX IF NOT EXISTS idx_estab_list_filiais
+    ON estabelecimentos_listagem (qtd_filiais);
 CREATE INDEX IF NOT EXISTS idx_estab_cnaes_cnae
     ON estabelecimento_cnaes (cnae_codigo);
 CREATE INDEX IF NOT EXISTS idx_estab_cnaes_cnpj_cnae

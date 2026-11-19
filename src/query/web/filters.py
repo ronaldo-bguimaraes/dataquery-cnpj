@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping
 
 from src.query.domain.codebook import MATRIZ_FILIAL, PORTES, SITUACOES
 from src.query.domain.normalization import is_valid_cnpj, normalize_text
+from src.query.domain.segmentos import is_segmento_valido
 
 UFS = {
     "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
@@ -17,6 +18,9 @@ UFS = {
 }
 
 SIMPLE_VALUES = {"sim", "nao", "qualquer"}
+
+IDADE_MAXIMA = 200
+FILIAIS_MAXIMAS = 10_000
 
 
 class FilterError(ValueError):
@@ -41,13 +45,32 @@ class EstabelecimentoFiltros:
     abertura_ate: date | None = None
     simples: str = "qualquer"
     mei: str = "qualquer"
+    segmento: str | None = None
+    idade_min: int | None = None
+    idade_max: int | None = None
+    filiais_min: int | None = None
+    filiais_max: int | None = None
+    com_contato: str = "qualquer"
     pagina: int = 1
+    # Referência para idade (fim da competência). Não é um parâmetro de URL.
+    referencia: date = field(default_factory=date.today)
 
     def as_query_params(self, *, include_page: bool = True) -> dict[str, str]:
         values: dict[str, str] = {}
-        for name in ("q", "situacao", "uf", "municipio", "cnae", "porte", "matriz_filial"):
+        for name in (
+            "q",
+            "situacao",
+            "uf",
+            "municipio",
+            "cnae",
+            "porte",
+            "matriz_filial",
+            "segmento",
+        ):
             value = getattr(self, name)
-            if value:
+            # `situacao=""` é uma escolha explícita por "todas" e precisa
+            # sobreviver à paginação; os demais filtros vazios são omitidos.
+            if value or (name == "situacao" and value is not None):
                 values[name] = str(value)
         if self.abertura_de:
             values["abertura_de"] = self.abertura_de.isoformat()
@@ -57,6 +80,12 @@ class EstabelecimentoFiltros:
             values["simples"] = self.simples
         if self.mei != "qualquer":
             values["mei"] = self.mei
+        for name in ("idade_min", "idade_max", "filiais_min", "filiais_max"):
+            value = getattr(self, name)
+            if value is not None:
+                values[name] = str(value)
+        if self.com_contato != "qualquer":
+            values["com_contato"] = self.com_contato
         if include_page and self.pagina > 1:
             values["pagina"] = str(self.pagina)
         return values
@@ -76,16 +105,23 @@ def _pairs(values: Mapping[str, Any] | Iterable[tuple[str, str]]) -> list[tuple[
     return [(str(key), str(value)) for key, value in values]
 
 
-def parse_filters(values: Mapping[str, Any] | Iterable[tuple[str, str]]) -> EstabelecimentoFiltros:
+def parse_filters(
+    values: Mapping[str, Any] | Iterable[tuple[str, str]],
+    *,
+    referencia: date | None = None,
+) -> EstabelecimentoFiltros:
     grouped: dict[str, list[str]] = defaultdict(list)
     for key, value in _pairs(values):
         grouped[key].append(value)
 
+    single_valued = {
+        "q", "situacao", "uf", "municipio", "cnae", "porte",
+        "matriz_filial", "abertura_de", "abertura_ate", "simples", "mei", "pagina",
+        "segmento", "idade_min", "idade_max", "filiais_min", "filiais_max",
+        "com_contato",
+    }
     for key, items in grouped.items():
-        if len(items) > 1 and key in {
-            "q", "situacao", "uf", "municipio", "cnae", "porte",
-            "matriz_filial", "abertura_de", "abertura_ate", "simples", "mei", "pagina",
-        }:
+        if len(items) > 1 and key in single_valued:
             raise FilterError(key, f"O filtro {key} deve ter um único valor.")
 
     def get(name: str) -> str | None:
@@ -109,11 +145,15 @@ def parse_filters(values: Mapping[str, Any] | Iterable[tuple[str, str]]) -> Esta
             if len(q) < 3:
                 raise FilterError("q", "Informe ao menos 3 caracteres para buscar por nome.")
 
-    situacao = get("situacao")
-    if situacao:
-        situacao = situacao.zfill(2)
-        if situacao not in SITUACOES:
-            raise FilterError("situacao", "Situação cadastral inválida.")
+    situacao = None
+    if "situacao" in grouped:
+        raw_situacao = grouped["situacao"][0].strip()
+        if raw_situacao:
+            situacao = raw_situacao.zfill(2)
+            if situacao not in SITUACOES:
+                raise FilterError("situacao", "Situação cadastral inválida.")
+        else:
+            situacao = ""
 
     uf = get("uf")
     if uf:
@@ -177,6 +217,50 @@ def parse_filters(values: Mapping[str, Any] | Iterable[tuple[str, str]]) -> Esta
         if pagina < 1:
             raise FilterError("pagina", "Página deve ser maior ou igual a 1.")
 
+    segmento = get("segmento")
+    if segmento:
+        segmento = segmento.upper()
+        if not is_segmento_valido(segmento):
+            raise FilterError("segmento", "Segmento inválido.")
+
+    def parse_bounded_int(name: str, maximum: int, *, label: str) -> int | None:
+        text = get(name)
+        if text is None:
+            return None
+        try:
+            number = int(text)
+        except ValueError:
+            raise FilterError(name, f"{label} deve ser um número inteiro.") from None
+        if number < 0 or number > maximum:
+            raise FilterError(name, f"{label} deve estar entre 0 e {maximum}.")
+        return number
+
+    idade_min = parse_bounded_int("idade_min", IDADE_MAXIMA, label="A idade mínima")
+    idade_max = parse_bounded_int("idade_max", IDADE_MAXIMA, label="A idade máxima")
+    if idade_min is not None and idade_max is not None and idade_min > idade_max:
+        raise FilterError(
+            "idade_min", "A idade mínima não pode ser maior que a máxima."
+        )
+
+    filiais_min = parse_bounded_int(
+        "filiais_min", FILIAIS_MAXIMAS, label="O mínimo de filiais"
+    )
+    filiais_max = parse_bounded_int(
+        "filiais_max", FILIAIS_MAXIMAS, label="O máximo de filiais"
+    )
+    if (
+        filiais_min is not None
+        and filiais_max is not None
+        and filiais_min > filiais_max
+    ):
+        raise FilterError(
+            "filiais_min", "O mínimo de filiais não pode ser maior que o máximo."
+        )
+
+    com_contato = (get("com_contato") or "qualquer").lower()
+    if com_contato not in SIMPLE_VALUES:
+        raise FilterError("com_contato", "Opção de contato inválida.")
+
     return EstabelecimentoFiltros(
         q=q,
         situacao=situacao,
@@ -189,5 +273,12 @@ def parse_filters(values: Mapping[str, Any] | Iterable[tuple[str, str]]) -> Esta
         abertura_ate=abertura_ate,
         simples=simples,
         mei=mei,
+        segmento=segmento,
+        idade_min=idade_min,
+        idade_max=idade_max,
+        filiais_min=filiais_min,
+        filiais_max=filiais_max,
+        com_contato=com_contato,
         pagina=pagina,
+        referencia=referencia or date.today(),
     )

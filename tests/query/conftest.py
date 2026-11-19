@@ -23,6 +23,8 @@ DATA_TABLES = [
     "simples",
     "estabelecimentos",
     "empresas",
+    "segmento_divisoes",
+    "segmentos",
     "municipios_por_uf",
     "cnaes_presentes",
     "query_metadata",

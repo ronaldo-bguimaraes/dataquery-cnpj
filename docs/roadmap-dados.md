@@ -60,11 +60,21 @@ Devem ser priorizadas conforme as perguntas reais dos usuários.
 - Atualizar contagem, prévia tabular e gráficos quando os filtros mudarem.
 - Permitir ordenar e paginar os resultados sem perder os filtros.
 - Exibir fonte e competência junto aos resultados.
-- Não oferecer exportação ou download no MVP.
+- O explorador cadastral não oferece exportação; a geração de listas para prospecção
+  tem fluxo próprio (feature 004), com CSV limitado e sem CPF.
+
+### Prospecção comercial (feature 004)
+
+- Recorte por segmento comercial derivado da divisão CNAE, UF, município, porte,
+  situação, matriz/filial, idade, filiais e presença de contato.
+- Indicadores: idade até o fim da competência, quantidade de CNAEs, de estabelecimentos
+  e de filiais do CNPJ raiz.
+- Contagens por segmento e por UF no mesmo recorte.
+- Lista CSV em streaming, uma linha por estabelecimento, com CNPJ raiz.
+- Fora do escopo: intenção de compra, orçamento, necessidade e enriquecimento de contato.
 
 ### Melhorias posteriores de exploração
 
-- Exportar recortes filtrados em CSV.
 - Salvar e comparar consultas e criar dashboards pessoais.
 
 ### Histórico por competência
@@ -111,7 +121,8 @@ observabilidade e versionamento/reprodutibilidade (10/10 do check).
 
 A hipótese atual é oferecer um explorador visual dos dados públicos: a pessoa escolhe
 uma competência, monta um recorte com filtros e entende os resultados em tabela e
-gráficos. O MVP não exporta arquivos. A proposta é permitir que o usuário explore os
+gráficos. O explorador cadastral não exporta arquivos; a prospecção B2B tem um CSV
+limitado para gerar a lista de abordagem. A proposta é permitir que o usuário explore os
 dados diretamente em vez de depender apenas de planilhas pré-segmentadas entregues
 pelo projeto.
 

@@ -38,12 +38,25 @@ def _positive_int(value: str | None, default: int, name: str) -> int:
     return number
 
 
+def _bounded_int(value: str | None, default: int, name: str, minimum: int, maximum: int) -> int:
+    if value is None or not str(value).strip():
+        return default
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{name} deve ser um inteiro entre {minimum} e {maximum}") from None
+    if number < minimum or number > maximum:
+        raise ConfigError(f"{name} deve estar entre {minimum} e {maximum}")
+    return number
+
+
 @dataclass(frozen=True)
 class QueryConfig:
     competencia: str = "2026-10"
     database_url: str = field(default="", repr=False)
     fonte: str = "Receita Federal"
     page_size: int = 25
+    export_limit: int = 50_000
     data_root: Path = field(default_factory=lambda: Path("/data"))
     storage_backend: str = "filesystem"
     scratch_dir: Path = field(default_factory=lambda: Path("/tmp/cnpj-query"))
@@ -52,6 +65,8 @@ class QueryConfig:
         object.__setattr__(self, "competencia", validate_competencia(self.competencia))
         if self.page_size < 1 or self.page_size > 100:
             raise ConfigError("page_size deve estar entre 1 e 100")
+        if self.export_limit < 1 or self.export_limit > 100_000:
+            raise ConfigError("export_limit deve estar entre 1 e 100000")
 
     @property
     def source_dir(self) -> Path:
@@ -72,6 +87,13 @@ class QueryConfig:
             fonte=os.getenv("CNPJ_QUERY_SOURCE", "Receita Federal"),
             page_size=_positive_int(
                 os.getenv("CNPJ_QUERY_PAGE_SIZE"), 25, "CNPJ_QUERY_PAGE_SIZE"
+            ),
+            export_limit=_bounded_int(
+                os.getenv("CNPJ_QUERY_EXPORT_LIMIT"),
+                50_000,
+                "CNPJ_QUERY_EXPORT_LIMIT",
+                1,
+                100_000,
             ),
             data_root=Path(os.getenv("CNPJ_DATA_ROOT", "/data")),
             storage_backend=os.getenv("CNPJ_STORAGE_BACKEND", "filesystem"),
