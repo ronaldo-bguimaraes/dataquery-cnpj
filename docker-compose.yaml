@@ -1,6 +1,73 @@
-# Local happy path: Airflow + filesystem storage under ./data (mounted as /data).
-# MinIO is no longer required. An S3-compatible endpoint can be started separately
-# when validating the opt-in S3/R2 path.
+# Local happy path: Airflow + portal de consulta + RustFS (storage S3-compatível).
+#
+# O pipeline Raw → Bronze grava em RustFS, e não em arquivos locais. O bucket é
+# criado uma única vez por `rustfs-init` no `docker compose up`.
 include:
   - airflow/docker-compose.yaml
   - query/docker-compose.yaml
+
+name: dataquery-cnpj
+
+services:
+  # Concede a posse do volume ao usuário 10001:10001 do container RustFS.
+  # O volume já pertence a esse usuário depois da primeira execução.
+  rustfs-perms:
+    image: alpine:3.20
+    user: root
+    volumes:
+      - rustfs-data:/fix
+    command:
+      - sh
+      - -c
+      - '[ "$(stat -c %u /fix)" = "10001" ] || chown -R 10001:10001 /fix'
+    restart: "no"
+
+  rustfs:
+    image: rustfs/rustfs:${RUSTFS_IMAGE_TAG:-latest}
+    command: ["/data"]
+    depends_on:
+      rustfs-perms:
+        condition: service_completed_successfully
+    environment:
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_VOLUMES: "/data"
+      RUSTFS_ACCESS_KEY: ${CNPJ_S3_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${CNPJ_S3_SECRET_KEY:-rustfsadmin}
+      RUSTFS_OBS_LOGGER_LEVEL: ${RUSTFS_LOG_LEVEL:-error}
+    ports:
+      - "127.0.0.1:${RUSTFS_API_PORT:-9000}:9000"
+      - "127.0.0.1:${RUSTFS_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  # Provisiona o bucket privado uma única vez, antes do primeiro uso pelo Airflow
+  # e pelo query-loader. `--ignore-existing` mantém a operação idempotente.
+  rustfs-init:
+    image: minio/mc:latest
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      CNPJ_S3_ACCESS_KEY: ${CNPJ_S3_ACCESS_KEY:-rustfsadmin}
+      CNPJ_S3_SECRET_KEY: ${CNPJ_S3_SECRET_KEY:-rustfsadmin}
+      CNPJ_S3_BUCKET: ${CNPJ_S3_BUCKET:-cnpj-data}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mc alias set rustfs "http://rustfs:9000" "$$CNPJ_S3_ACCESS_KEY" "$$CNPJ_S3_SECRET_KEY" >/dev/null
+        mc mb --ignore-existing "rustfs/$$CNPJ_S3_BUCKET"
+        mc anonymous set none "rustfs/$$CNPJ_S3_BUCKET" >/dev/null 2>&1 || true
+    restart: "no"
+
+volumes:
+  rustfs-data:

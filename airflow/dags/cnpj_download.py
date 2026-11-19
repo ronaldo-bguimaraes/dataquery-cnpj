@@ -58,10 +58,11 @@ Bronze já publicados para retry.
 
 O backend é escolhido por `CNPJ_STORAGE_BACKEND`:
 
-- `filesystem` (default local): grava em `CNPJ_DATA_ROOT` (`/data` nos containers,
-  montado a partir de `data/` na raiz do repositório).
-- `s3`/`r2`: usa um endpoint compatível com S3 (Cloudflare R2 em produção), com
-  `CNPJ_S3_ENDPOINT`, `CNPJ_S3_BUCKET`, `CNPJ_S3_ACCESS_KEY`,
+- `s3` (default no Compose): usa o RustFS local em `http://rustfs:9000`, com
+  `CNPJ_S3_BUCKET=cnpj-data`; o bucket é criado pelo serviço `rustfs-init`.
+- `filesystem`: grava em `CNPJ_DATA_ROOT` (apenas testes/CLI fora do Compose).
+- `s3`/`r2` com endpoint externo: aplica o mesmo backend ao Cloudflare R2 em
+  produção, trocando `CNPJ_S3_ENDPOINT`, `CNPJ_S3_BUCKET`, `CNPJ_S3_ACCESS_KEY`,
   `CNPJ_S3_SECRET_KEY` e, opcionalmente, `CNPJ_S3_REGION`.
 
 A troca de backend não altera a DAG nem as chaves lógicas. No Compose local, apenas

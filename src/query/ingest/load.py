@@ -12,6 +12,8 @@ from pathlib import Path
 from src.query.config import ConfigError, QueryConfig, validate_competencia
 from src.query.ingest.inventory import InventoryError
 from src.query.ingest.postgres import LoadError, load_inventory
+from src.query.ingest.source import bronze_source_dir
+from src.storage.protocol import StorageConfigError, StorageOperationError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,14 +39,26 @@ def main(argv: list[str] | None = None) -> int:
         dsn = args.dsn or config.database_url
         if not dsn:
             raise ConfigError("DSN não informado; defina CNPJ_QUERY_DATABASE_URL ou use --dsn")
-        source_dir = args.source_dir or config.source_dir
-        summary = load_inventory(
-            source_dir,
-            dsn,
-            competencia=competencia,
-            fonte=args.fonte or config.fonte,
-        )
-    except (ConfigError, InventoryError, LoadError) as exc:
+        with bronze_source_dir(
+            competencia,
+            local_root=config.data_root,
+            storage_backend=config.storage_backend,
+            scratch_dir=config.scratch_dir,
+            source_dir=args.source_dir,
+        ) as source_dir:
+            summary = load_inventory(
+                source_dir,
+                dsn,
+                competencia=competencia,
+                fonte=args.fonte or config.fonte,
+            )
+    except (
+        ConfigError,
+        InventoryError,
+        LoadError,
+        StorageConfigError,
+        StorageOperationError,
+    ) as exc:
         logging.getLogger(__name__).error("Carga falhou: %s", exc)
         return 1
     print(json.dumps(summary, ensure_ascii=False))
